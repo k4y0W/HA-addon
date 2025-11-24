@@ -11,25 +11,11 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-# --- 🗺️ TWOJA MAPA URZĄDZEŃ (HARDCODED) ---
-# Tu Ty, jako admin, przypisujesz techniczne ID do nazw z listy
-STATION_MAP = {
-    "Biurko Jana": {
-        "power": "sensor.smart_plug_biezace_zuzycie",
-        "motion": "binary_sensor.sonoff_snzb_06p"
-    },
-    "Biurko Marka": {
-        "power": "sensor.gniazdko_marka_power",  # Zmień na prawdziwe ID!
-        "motion": "binary_sensor.ruch_marka"      # Zmień na prawdziwe ID!
-    },
-    "Sala Konferencyjna": {
-        "power": "sensor.tv_sala_power",
-        "motion": "binary_sensor.ruch_sala"
-    },
-    "Kuchnia": {
-        "power": "sensor.ekspres_do_kawy_power",
-        "motion": None # Kuchnia może nie mieć czujnika ruchu
-    }
+# --- 🗺️ MAPA TŁUMACZENIA (Ludzki -> Techniczny) ---
+SENSOR_MAP = {
+    "Temperatura": "sensor.light_sensor_temperatura",
+    "Wilgotnosc": "sensor.light_sensor_wilgotnosc",
+    "Cisnienie": "sensor.light_sensor_cisnienie"
 }
 
 def log(message):
@@ -56,24 +42,24 @@ def get_ha_state(entity_id):
         log(f"Error fetching {entity_id}: {e}")
     return None
 
-def update_employee_sensor(name, status, work_time_minutes):
+def update_employee_sensor(name, label, value, unit, icon):
     safe_name = name.lower().replace(" ", "_")
     
-    # Status
-    requests.post(f"{API_URL}/states/sensor.{safe_name}_status", headers=HEADERS, json={
-        "state": status,
-        "attributes": {"friendly_name": f"{name} - Status", "icon": "mdi:account-tie"}
-    })
-
-    # Czas
-    requests.post(f"{API_URL}/states/sensor.{safe_name}_czas_pracy", headers=HEADERS, json={
-        "state": work_time_minutes,
-        "attributes": {"friendly_name": f"{name} - Minuty Pracy", "unit_of_measurement": "min", "icon": "mdi:clock-outline"}
-    })
+    # Tworzymy sensor w HA
+    entity_id = f"sensor.{safe_name}_wybrany_pomiar"
+    
+    state_data = {
+        "state": value,
+        "attributes": {
+            "friendly_name": f"{name} - {label}",
+            "unit_of_measurement": unit,
+            "icon": icon
+        }
+    }
+    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json=state_data)
 
 def main():
-    log("Startuję logikę ze sztywną mapą urządzeń...")
-    work_counters = {} 
+    log("Startuję logikę z listą wyboru...")
 
     while True:
         options = get_options()
@@ -81,55 +67,37 @@ def main():
 
         for emp in employees:
             name = emp['name']
-            # Pobieramy to, co wybrał Kierownik z listy (np. "Biurko Jana")
-            selected_station = emp.get('workstation')
-            threshold = float(emp.get('threshold_watts', 10))
-
-            if name not in work_counters:
-                work_counters[name] = 0
-
-            # --- 🔍 TŁUMACZENIE NAZWY NA ID ---
-            station_data = STATION_MAP.get(selected_station)
             
-            if not station_data:
-                log(f"BŁĄD: Nie zdefiniowano mapy dla stanowiska: {selected_station}")
-                update_employee_sensor(name, "Błąd Konfiguracji", 0)
+            # 1. Pobieramy to, co wybrał User (np. "Temperatura")
+            wybor_usera = emp.get('typ_pomiaru')
+            
+            # 2. Tłumaczymy to na ID sensora (z mapy na górze)
+            real_sensor_id = SENSOR_MAP.get(wybor_usera)
+
+            if not real_sensor_id:
+                log(f"Nie znaleziono mapowania dla: {wybor_usera}")
                 continue
 
-            power_id = station_data.get("power")
-            motion_id = station_data.get("motion")
+            # 3. Pobieramy wartość z HA
+            value = get_ha_state(real_sensor_id)
+            
+            # 4. Ustawiamy jednostki i ikony zależnie od wyboru (dla bajeru)
+            unit = ""
+            icon = "mdi:eye"
+            
+            if wybor_usera == "Temperatura":
+                unit = "°C"
+                icon = "mdi:thermometer"
+            elif wybor_usera == "Wilgotnosc":
+                unit = "%"
+                icon = "mdi:water-percent"
+            elif wybor_usera == "Cisnienie":
+                unit = "hPa"
+                icon = "mdi:gauge"
 
-            # --- LOGIKA ---
-            status = "Nieznany"
-            is_working = False
-
-            # 1. Sprawdź Ruch (jeśli zdefiniowany)
-            is_present = True
-            if motion_id:
-                motion_state = get_ha_state(motion_id)
-                if motion_state != 'on':
-                    is_present = False
-                    status = "Poza Biurkiem"
-
-            # 2. Sprawdź Prąd (tylko jeśli jest obecny)
-            if is_present:
-                current_power = get_ha_state(power_id)
-                if current_power and current_power not in ["unavailable", "unknown"]:
-                    try:
-                        if float(current_power) > threshold:
-                            status = "Pracuje"
-                            is_working = True
-                        else:
-                            status = "Obecny (Idle)"
-                    except ValueError:
-                        status = "Błąd Odczytu"
-                else:
-                    status = "Brak Danych"
-
-            if is_working:
-                work_counters[name] += (10 / 60)
-
-            update_employee_sensor(name, status, round(work_counters[name], 1))
+            # 5. Wysyłamy do HA
+            if value:
+                update_employee_sensor(name, wybor_usera, value, unit, icon)
 
         time.sleep(10)
 
