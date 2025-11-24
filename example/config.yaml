@@ -1,14 +1,21 @@
----
 name: Employee Manager
-version: "1.0.11"
+version: "1.1.0"
 slug: employee_manager
-description: System zarządzania pracownikami
+description: Zarządzanie pracownikami na podstawie czujników
 url: https://github.com/k4y0W/HA-addon
 startup: application
 boot: auto
 init: false
+map:
+  - config:rw
 arch:
   - aarch64
   - amd64
-options: {}
-schema: {}
+options:
+  employees: []
+schema:
+  employees:
+    - name: str
+      power_sensor: str
+      motion_sensor: str
+      threshold_watts: float

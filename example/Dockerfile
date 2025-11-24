@@ -1,16 +1,22 @@
 ARG BUILD_FROM=ghcr.io/hassio-addons/base:19.0.0
-# hadolint ignore=DL3006
 FROM ${BUILD_FROM}
 
-# Copy root filesystem
-COPY rootfs /
-
-# Setup base
 RUN apk add --no-cache \
-    coreutils=9.4-r2 \
-    wget=1.21.4-r0
+    coreutils \
+    wget \
+    python3 \
+    py3-pip
 
-# Build arguments
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install requests
+
+COPY run.sh /
+COPY employee_logic.py /
+
+RUN chmod a+x /run.sh
+
 ARG BUILD_ARCH
 ARG BUILD_DATE
 ARG BUILD_DESCRIPTION
@@ -19,7 +25,6 @@ ARG BUILD_REF
 ARG BUILD_REPOSITORY
 ARG BUILD_VERSION
 
-# Labels
 LABEL \
     io.hass.name="${BUILD_NAME}" \
     io.hass.description="${BUILD_DESCRIPTION}" \
@@ -38,3 +43,5 @@ LABEL \
     org.opencontainers.image.created=${BUILD_DATE} \
     org.opencontainers.image.revision=${BUILD_REF} \
     org.opencontainers.image.version=${BUILD_VERSION}
+
+CMD [ "/run.sh" ]
