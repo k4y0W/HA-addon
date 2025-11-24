@@ -29,6 +29,8 @@ def get_ha_state(entity_id):
         if response.status_code == 200:
             data = response.json()
             return data.get("state")
+        else:
+            log(f"API Error GET {entity_id}: Status {response.status_code}")
     except Exception as e:
         log(f"Error fetching {entity_id}: {e}")
     return None
@@ -44,7 +46,9 @@ def update_employee_sensor(name, status, work_time_minutes):
             "icon": "mdi:account-tie"
         }
     }
-    requests.post(f"{API_URL}/states/{entity_id_status}", headers=HEADERS, json=state_data)
+    response_status = requests.post(f"{API_URL}/states/{entity_id_status}", headers=HEADERS, json=state_data)
+    if response_status.status_code not in [200, 201]:
+        log(f"API Error POST Status Sensor: Status {response_status.status_code} - {response_status.text}")
 
     entity_id_time = f"sensor.{safe_name}_czas_pracy"
     state_data_time = {
@@ -55,7 +59,9 @@ def update_employee_sensor(name, status, work_time_minutes):
             "icon": "mdi:clock-outline"
         }
     }
-    requests.post(f"{API_URL}/states/{entity_id_time}", headers=HEADERS, json=state_data_time)
+    response_time = requests.post(f"{API_URL}/states/{entity_id_time}", headers=HEADERS, json=state_data_time)
+    if response_time.status_code not in [200, 201]:
+        log(f"API Error POST Time Sensor: Status {response_time.status_code} - {response_time.text}")
 
 def main():
     log("Starting logic...")
@@ -66,6 +72,9 @@ def main():
         options = get_options()
         employees = options.get("employees", [])
 
+        if not employees:
+            log("Brak skonfigurowanych pracowników. Czekam na konfigurację...")
+        
         for emp in employees:
             name = emp['name']
             power_sensor = emp['power_sensor']

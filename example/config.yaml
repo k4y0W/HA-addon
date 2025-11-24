@@ -1,5 +1,5 @@
 name: Employee Manager
-version: "1.1.1"
+version: "1.1.2"
 slug: employee_manager
 description: Zarządzanie pracownikami na podstawie czujników
 url: https://github.com/k4y0W/HA-addon
