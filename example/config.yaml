@@ -1,5 +1,5 @@
 name: Employee Manager
-version: "1.1.3"
+version: "1.1.4"
 slug: employee_manager
 description: System zarządzania pracownikami
 url: https://github.com/k4y0W/HA-addon
@@ -17,6 +17,5 @@ options:
 schema:
   employees:
     - name: str
-      power_sensor: str
-      motion_sensor: str
+      workstation: list(Temperatura|Wilgotnosc|Cisnienie)
       threshold_watts: float
