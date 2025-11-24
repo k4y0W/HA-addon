@@ -17,6 +17,5 @@ jobs:
     uses: hassio-addons/workflows/.github/workflows/addon-deploy.yaml@main
     with:
       repository: k4y0W/HA-addon
-      owner_name: ${{ github.repository_owner | lower }}
     secrets:
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
