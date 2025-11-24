@@ -1,8 +1,7 @@
 ---
 name: Deploy
 
-"on":
-  workflow_dispatch:
+on:
   release:
     types:
       - published
@@ -11,11 +10,12 @@ name: Deploy
     branches: [main]
     types:
       - completed
+  workflow_dispatch:
 
 jobs:
   workflows:
     uses: hassio-addons/workflows/.github/workflows/addon-deploy.yaml@main
     with:
-      repository: k4y0W/HA-addon
+      repository: k4y0w/ha-addon
     secrets:
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
