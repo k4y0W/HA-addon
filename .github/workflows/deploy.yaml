@@ -17,3 +17,4 @@ jobs:
       repository: k4y0W/HA-addon
     secrets:
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+
