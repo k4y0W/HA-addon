@@ -1,4 +1,6 @@
+---
 name: Deploy
+
 on:
   release:
     types:
