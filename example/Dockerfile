@@ -16,6 +16,7 @@ COPY run.sh /
 COPY employee_logic.py /
 COPY web_server.py /
 COPY employee_map.py /
+COPY employee-card.js /
 
 RUN chmod a+x /run.sh
 
