@@ -1,4 +1,3 @@
-// --- KONFIGURACJA: Co karta ma wykrywać ---
 const KNOWN_SENSOR_TYPES = [
   { suffix: 'temperatura', icon: 'mdi:thermometer', unit: '°C' },
   { suffix: 'wilgotnosc', icon: 'mdi:water-percent', unit: '%' },
@@ -6,68 +5,87 @@ const KNOWN_SENSOR_TYPES = [
   { suffix: 'moc', icon: 'mdi:lightning-bolt', unit: 'W' },
   { suffix: 'napiecie', icon: 'mdi:sine-wave', unit: 'V' },
   { suffix: 'natezenie', icon: 'mdi:current-ac', unit: 'A' },
-  { suffix: 'bateria', icon: 'mdi:battery', unit: '%' }
+  { suffix: 'bateria', icon: 'mdi:battery', unit: '%' },
+  { suffix: 'pm25', icon: 'mdi:blur', unit: 'μg/m³' }
 ];
 
-// --- WSPÓLNE STYLE CSS ---
 const SHARED_STYLES = `
   .emp-card { 
     background: var(--ha-card-background, white); 
     border-radius: 12px; 
-    box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,0.1)); 
+    box-shadow: var(--ha-card-box-shadow, 0 2px 5px rgba(0,0,0,0.15)); 
     padding: 16px; 
-    border: 1px solid var(--divider-color, #eee);
+    border: 1px solid var(--divider-color, #ddd);
     margin-bottom: 12px;
     transition: transform 0.1s;
   }
-  .emp-card:hover { transform: scale(1.01); }
+  .emp-card:hover { transform: scale(1.01); border-color: #bbb; }
   
-  .header { display: flex; align-items: center; width: 100%; margin-bottom: 12px; }
+  .header { display: flex; align-items: center; width: 100%; margin-bottom: 14px; }
   
-  .icon-box { width: 45px; height: 45px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px; background: #eee; color: #555; }
+  .icon-box { 
+    width: 48px; height: 48px; 
+    border-radius: 50%; 
+    display: flex; align-items: center; justify-content: center; 
+    margin-right: 16px; 
+    background: #eee; color: #444;
+    font-weight: bold;
+  }
   
-  .is-working { background: rgba(76, 175, 80, 0.15); color: #2E7D32; border: 2px solid rgba(76, 175, 80, 0.3); }
-  .is-idle { background: rgba(255, 193, 7, 0.15); color: #F57F17; border: 2px solid rgba(255, 193, 7, 0.3); }
-  .is-absent { background: rgba(244, 67, 54, 0.1); color: #C62828; }
+  /* Bardziej nasycone kolory statusów */
+  .is-working { background: #E8F5E9; color: #1B5E20; border: 2px solid #4CAF50; }
+  .is-idle { background: #FFFDE7; color: #E65100; border: 2px solid #FFC107; }
+  .is-absent { background: #FFEBEE; color: #B71C1C; border: 2px solid #EF5350; }
 
   .info { flex: 1; }
-  .emp-name { font-weight: 700; font-size: 1.1rem; }
-  .emp-status { font-size: 0.85rem; opacity: 0.8; }
+  /* Ciemniejsze, większe czcionki */
+  .emp-name { 
+    font-weight: 800; 
+    font-size: 1.3rem; 
+    color: #111; /* Prawie czarny */
+    line-height: 1.2;
+  }
+  .emp-status { 
+    font-size: 1rem; 
+    color: #444; /* Ciemny szary */
+    font-weight: 600;
+    margin-top: 2px;
+  }
   
-  .stats { text-align: right; min-width: 70px; }
-  .time-val { font-size: 1.3rem; font-weight: 800; color: var(--primary-text-color); }
-  .time-unit { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; }
+  .stats { text-align: right; min-width: 80px; }
+  .time-val { 
+    font-size: 1.6rem; 
+    font-weight: 900; 
+    color: #000; /* Czarny */
+  }
+  .time-unit { 
+    font-size: 0.75rem; 
+    color: #555; 
+    font-weight: 700; 
+    text-transform: uppercase; 
+  }
 
+  .sensors-row { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 2px solid #f0f0f0; }
   .sensor-chip { 
-  display: inline-flex; 
-  align-items: center; 
-  background: #ffffff; /* Białe tło */
-  color: #333;         /* Ciemny tekst */
-  padding: 6px 12px; 
-  border-radius: 20px; /* Bardziej zaokrąglone */
-  font-size: 0.85rem; 
-  font-weight: 500;
-  border: 1px solid #e0e0e0; /* Delikatna ramka */
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* Lekki cień */
-  margin-top: 4px;
-}
-.sensor-chip ha-icon { 
-  --mdc-icon-size: 18px; 
-  margin-right: 6px; 
-  color: #5f6368; /* Szara ikona */
-}
+    display: inline-flex; align-items: center; 
+    background: #f8f9fa; 
+    padding: 6px 12px; border-radius: 20px; 
+    font-size: 0.9rem; 
+    font-weight: 600;
+    color: #333; /* Ciemny tekst na chipach */
+    border: 1px solid #ddd;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  }
+  .sensor-chip ha-icon { --mdc-icon-size: 18px; margin-right: 6px; color: #555; }
 `;
 
-// --- HELPER: Generowanie HTML dla jednego pracownika ---
 function renderEmployeeHTML(hass, entityId) {
   const statusEntity = hass.states[entityId];
   if (!statusEntity) return '';
 
-  // Ustalanie nazw
   const fullName = statusEntity.attributes.friendly_name.replace(' - Status', '');
   const baseId = entityId.replace('_status', '');
   
-  // Status
   const state = statusEntity.state;
   let statusClass = 'is-absent';
   let iconName = 'mdi:account-off';
@@ -75,11 +93,9 @@ function renderEmployeeHTML(hass, entityId) {
   if (state === 'Pracuje') { statusClass = 'is-working'; iconName = 'mdi:laptop'; }
   else if (state === 'Obecny (Idle)') { statusClass = 'is-idle'; iconName = 'mdi:coffee'; }
 
-  // Czas
   const timeEntity = hass.states[`${baseId}_czas_pracy`];
   const timeVal = timeEntity ? Math.round(parseFloat(timeEntity.state)) : '--';
 
-  // Sensory dodatkowe
   let sensorsHtml = '';
   KNOWN_SENSOR_TYPES.forEach(type => {
     const sId = `${baseId}_${type.suffix}`;
@@ -112,19 +128,14 @@ function renderEmployeeHTML(hass, entityId) {
   `;
 }
 
-// ============================================================
-// 1. KARTA POJEDYNCZA (Single)
-// ============================================================
 class EmployeeCard extends HTMLElement {
   setConfig(config) {
     if (!config.name) throw new Error('Podaj imię!');
     this.config = config;
   }
-
   set hass(hass) {
-    const id = this.config.name.toLowerCase().replace(/ /g, "_").replace(/ą/g,'a').replace(/ć/g,'c').replace(/ę/g,'e').replace(/ł/g,'l').replace(/ń/g,'n').replace(/ó/g,'o').replace(/ś/g,'s').replace(/ź/g,'z').replace(/ż/g,'z');
+    const id = this.config.name.toLowerCase().trim().replace(/ /g, "_").replace(/ą/g,'a').replace(/ć/g,'c').replace(/ę/g,'e').replace(/ł/g,'l').replace(/ń/g,'n').replace(/ó/g,'o').replace(/ś/g,'s').replace(/ź/g,'z').replace(/ż/g,'z');
     const entityId = `sensor.${id}_status`;
-    
     if (!this.content) {
       this.innerHTML = `<style>${SHARED_STYLES}</style><div id="card-content"></div>`;
       this.content = this.querySelector('#card-content');
@@ -136,30 +147,21 @@ class EmployeeCard extends HTMLElement {
   static getConfigElement() { return document.createElement("employee-card-editor"); }
 }
 
-// ============================================================
-// 2. KARTA ZBIORCZA (Dashboard - Auto)
-// ============================================================
 class EmployeeDashboard extends HTMLElement {
-  setConfig(config) {
-    this.config = config;
-    this.title = config.title || "Zespół";
-  }
-
+  setConfig(config) { this.config = config; this.title = config.title || "Zespół"; }
   set hass(hass) {
     if (!this.content) {
       this.innerHTML = `
         <style>
           ${SHARED_STYLES}
           .dashboard-container { display: flex; flex-direction: column; }
-          .dash-title { font-size: 1.2rem; font-weight: bold; margin-bottom: 10px; color: var(--primary-text-color); padding-left: 5px; }
+          .dash-title { font-size: 1.4rem; font-weight: 800; margin-bottom: 15px; color: var(--primary-text-color); padding-left: 5px; }
         </style>
         <div class="dash-title">${this.title}</div>
         <div id="dashboard-content" class="dashboard-container">Ładowanie...</div>
       `;
       this.content = this.querySelector('#dashboard-content');
     }
-
-    // Skanujemy system w poszukiwaniu pracowników
     const employees = Object.keys(hass.states)
       .filter(eid => eid.startsWith('sensor.') && eid.endsWith('_status'))
       .sort();
@@ -168,14 +170,11 @@ class EmployeeDashboard extends HTMLElement {
       this.content.innerHTML = "<div style='padding:20px;text-align:center;opacity:0.6'>Brak pracowników.<br>Dodaj ich w panelu Employee Manager.</div>";
       return;
     }
-
-    // Generujemy HTML dla każdego znalezionego pracownika
     this.content.innerHTML = employees.map(eid => renderEmployeeHTML(hass, eid)).join('');
   }
   getCardSize() { return 3; }
 }
 
-// --- EDYTOR DLA POJEDYNCZEJ KARTY ---
 class EmployeeCardEditor extends HTMLElement {
   setConfig(config) { this._config = config; this.render(); }
   render() {
@@ -193,20 +192,10 @@ class EmployeeCardEditor extends HTMLElement {
   }
 }
 
-// --- REJESTRACJA ---
 customElements.define('employee-card-editor', EmployeeCardEditor);
 customElements.define('employee-card', EmployeeCard);
 customElements.define('employee-dashboard', EmployeeDashboard);
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "employee-card",
-  name: "Pracownik (Pojedynczy)",
-  description: "Karta jednego pracownika"
-});
-window.customCards.push({
-  type: "employee-dashboard",
-  name: "Panel Zespołu (AUTO)",
-  preview: true,
-  description: "Automatycznie wyświetla wszystkich pracowników"
-});
+window.customCards.push({ type: "employee-card", name: "Pracownik (Pojedynczy)", description: "Karta jednego pracownika" });
+window.customCards.push({ type: "employee-dashboard", name: "Panel Zespołu (AUTO)", preview: true, description: "Automatycznie wyświetla wszystkich pracowników" });

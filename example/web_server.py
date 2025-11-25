@@ -228,7 +228,51 @@ HTML_PAGE = """
         const count = document.querySelectorAll('#sensorList input:checked').length;
         countBadge.innerText = count + " wybranych";
     }
+    async function installCard() {
+        const btn = document.getElementById('tab-install');
+        const originalContent = btn.innerHTML;
+        
+        // 1. Próba automatyczna
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+        try {
+            const res = await fetch('api/install_card', { method: 'POST' });
+            const data = await res.json();
+            
+            if(data.success) {
+                btn.className = "nav-link text-success fw-bold";
+                btn.innerHTML = '<i class="mdi mdi-check"></i> Gotowe! Odśwież (F5)';
+            } else {
+                throw new Error("Fallback needed");
+            }
+        } catch (e) {
+            // 2. Plan B: Kopiowanie i otwieranie karty (Bez alertów)
+            const link = "/local/employee-card.js";
+            
+            // Kopiowanie do schowka (nowa metoda + stara)
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(link);
+            } else {
+                // Fallback dla iframe bez https
+                const textArea = document.createElement("textarea");
+                textArea.value = link;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+            }
 
+            // Zmiana wyglądu przycisku
+            btn.className = "nav-link text-warning fw-bold";
+            btn.innerHTML = '<i class="mdi mdi-content-copy"></i> Skopiowano link!';
+            
+            // Otwarcie ustawień w nowej karcie po 1 sekundzie
+            setTimeout(() => {
+                btn.innerHTML = originalContent;
+                btn.className = "nav-link text-success fw-bold";
+                window.open("/config/lovelace/resources", "_blank");
+            }, 1500);
+        }
+    }
     function renderSensorList(filterText = "") {
         chkContainer.innerHTML = "";
         if (!ALL_SENSORS || ALL_SENSORS.length === 0) { chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów.</div>'; return; }
