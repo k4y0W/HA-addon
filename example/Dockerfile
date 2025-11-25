@@ -10,10 +10,12 @@ RUN apk add --no-cache \
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+RUN pip install flask gunicorn requests
 RUN pip install requests
 
 COPY run.sh /
 COPY employee_logic.py /
+COPY web_server.py /
 
 RUN chmod a+x /run.sh
 

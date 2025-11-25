@@ -12,6 +12,10 @@ map:
 arch:
   - aarch64
   - amd64
+ingress: true
+panel_icon: mdi:account-group
+environment:
+  PYTHON_LOG_LEVEL: info
 options:
   employees: []
 schema:

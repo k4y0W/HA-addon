@@ -11,7 +11,6 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-# --- 🗺️ MAPA TŁUMACZENIA (Ludzki -> Techniczny) ---
 SENSOR_MAP = {
     "Temperatura": "sensor.light_sensor_temperatura",
     "Wilgotnosc": "sensor.light_sensor_wilgotnosc",
