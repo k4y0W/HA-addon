@@ -3,7 +3,6 @@ import time
 import requests
 import json
 import sys
-from employee_map import SENSOR_MAP # Import mapy
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 API_URL = "http://supervisor/core/api"
@@ -13,68 +12,81 @@ HEADERS = {
 }
 DATA_FILE = "/data/employees.json"
 
-def log(message):
-    print(f"[EmployeeLogic] {message}", flush=True)
+def log(message): print(f"[Logic] {message}", flush=True)
 
-def get_employees_from_db():
-    if not os.path.exists(DATA_FILE):
-        return []
+def get_data():
+    if not os.path.exists(DATA_FILE): return []
     try:
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return []
+        with open(DATA_FILE, 'r') as f: return json.load(f)
+    except: return []
 
-def get_ha_state(entity_id):
+def get_state_full(entity_id):
     if not entity_id: return None
     try:
-        url = f"{API_URL}/states/{entity_id}"
-        response = requests.get(url, headers=HEADERS)
-        if response.status_code == 200:
-            return response.json().get("state")
-    except:
-        pass
+        r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
+        if r.status_code == 200: return r.json()
+    except: pass
     return None
 
-def update_sensor(safe_name, suffix, value, friendly_name, unit, icon):
-    entity_id = f"sensor.{safe_name}_{suffix}"
-    payload = {
-        "state": value,
-        "attributes": {
-            "friendly_name": friendly_name,
-            "unit_of_measurement": unit,
-            "icon": icon
-        }
-    }
-    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json=payload)
+def set_state(entity_id, state, friendly, icon, unit=None):
+    pl = {"state": state, "attributes": {"friendly_name": friendly, "icon": icon}}
+    if unit: pl["attributes"]["unit_of_measurement"] = unit
+    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json=pl)
 
 def main():
-    log("Startuję logikę opartą o bazę danych JSON...")
+    log("Startuję logikę (Auto-Sensors)...")
+    work_counters = {}
 
     while True:
-        employees = get_employees_from_db()
-
-        for emp in employees:
+        emps = get_data()
+        for emp in emps:
             name = emp['name']
-            assigned_sensors = emp.get('sensors', [])
-            safe_name = name.lower().replace(" ", "_")
+            safe = name.lower().replace(" ", "_")
+            
+            # 1. STATUS / CZAS (Bazowane na mocy)
+            # Szukamy wśród przypisanych czujników takiego, który mierzy W (Waty)
+            power_val = 0
+            assigned_ids = emp.get('sensors', [])
+            
+            for eid in assigned_ids:
+                data = get_state_full(eid)
+                if data:
+                    unit = data['attributes'].get('unit_of_measurement', '')
+                    if unit == 'W': # Znalazłem gniazdko!
+                        try: power_val = float(data['state'])
+                        except: pass
+                        break
+            
+            if name not in work_counters: work_counters[name] = 0.0
+            
+            status = "Obecny (Idle)"
+            if power_val > 20.0: # Próg
+                status = "Pracuje"
+                work_counters[name] += (10/60)
+            elif power_val == 0:
+                status = "Nieobecny"
 
-            # Dla każdego przypisanego czujnika (np. Temperatura, Wilgotnosc)
-            for sensor_human_name in assigned_sensors:
-                
-                # Pobierz dane techniczne z mapy
-                sensor_def = SENSOR_MAP.get(sensor_human_name)
-                if not sensor_def: continue
+            set_state(f"sensor.{safe}_status", status, f"{name} - Status", "mdi:account")
+            set_state(f"sensor.{safe}_czas_pracy", round(work_counters[name], 1), f"{name} - Czas", "mdi:clock", "min")
 
-                real_id = sensor_def['entity_id']
-                val = get_ha_state(real_id)
-
-                if val:
-                    # Tworzymy encję w HA: sensor.jan_temperatura
-                    suffix = sensor_human_name.lower()
-                    friendly = f"{name} - {sensor_human_name}"
+            # 2. KOPIOWANIE SENSORÓW (Dla karty Lovelace)
+            # Tworzymy wirtualne sensory (np. sensor.jan_temperatura) na podstawie wybranych
+            for eid in assigned_ids:
+                data = get_state_full(eid)
+                if data:
+                    val = data['state']
+                    unit = data['attributes'].get('unit_of_measurement', '')
+                    original_name = data['attributes'].get('friendly_name', 'Czujnik')
                     
-                    update_sensor(safe_name, suffix, val, friendly, sensor_def['unit'], sensor_def['icon'])
+                    # Próbujemy zgadnąć suffix (temperatura/wilgotnosc) na podstawie jednostki
+                    suffix = "pomiar"
+                    icon = "mdi:eye"
+                    if unit == "°C": suffix = "temperatura"; icon="mdi:thermometer"
+                    elif unit == "%": suffix = "wilgotnosc"; icon="mdi:water-percent"
+                    elif unit == "hPa": suffix = "cisnienie"; icon="mdi:gauge"
+                    
+                    # Tworzymy sensor.jan_temperatura
+                    set_state(f"sensor.{safe}_{suffix}", val, f"{name} - {original_name}", icon, unit)
 
         time.sleep(10)
 
