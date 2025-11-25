@@ -1,219 +1,200 @@
-// Definicja znanych typów czujników (musi pasować do tego co masz w mapie Pythona)
-// Karta sprawdzi, czy dany pracownik ma te sensory.
+// --- KONFIGURACJA: Co karta ma wykrywać ---
 const KNOWN_SENSOR_TYPES = [
   { suffix: 'temperatura', icon: 'mdi:thermometer', unit: '°C' },
   { suffix: 'wilgotnosc', icon: 'mdi:water-percent', unit: '%' },
   { suffix: 'cisnienie', icon: 'mdi:gauge', unit: 'hPa' },
-  { suffix: 'moc', icon: 'mdi:lightning-bolt', unit: 'W' },         // Na przyszłość
-  { suffix: 'napiecie', icon: 'mdi:sine-wave', unit: 'V' },         // Na przyszłość
-  { suffix: 'natezenie', icon: 'mdi:current-ac', unit: 'A' }        // Na przyszłość
+  { suffix: 'moc', icon: 'mdi:lightning-bolt', unit: 'W' },
+  { suffix: 'napiecie', icon: 'mdi:sine-wave', unit: 'V' },
+  { suffix: 'natezenie', icon: 'mdi:current-ac', unit: 'A' },
+  { suffix: 'bateria', icon: 'mdi:battery', unit: '%' }
 ];
 
+// --- WSPÓLNE STYLE CSS ---
+const SHARED_STYLES = `
+  .emp-card { 
+    background: var(--ha-card-background, white); 
+    border-radius: 12px; 
+    box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,0.1)); 
+    padding: 16px; 
+    border: 1px solid var(--divider-color, #eee);
+    margin-bottom: 12px;
+    transition: transform 0.1s;
+  }
+  .emp-card:hover { transform: scale(1.01); }
+  
+  .header { display: flex; align-items: center; width: 100%; margin-bottom: 12px; }
+  
+  .icon-box { width: 45px; height: 45px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px; background: #eee; color: #555; }
+  
+  .is-working { background: rgba(76, 175, 80, 0.15); color: #2E7D32; border: 2px solid rgba(76, 175, 80, 0.3); }
+  .is-idle { background: rgba(255, 193, 7, 0.15); color: #F57F17; border: 2px solid rgba(255, 193, 7, 0.3); }
+  .is-absent { background: rgba(244, 67, 54, 0.1); color: #C62828; }
+
+  .info { flex: 1; }
+  .emp-name { font-weight: 700; font-size: 1.1rem; }
+  .emp-status { font-size: 0.85rem; opacity: 0.8; }
+  
+  .stats { text-align: right; min-width: 70px; }
+  .time-val { font-size: 1.3rem; font-weight: 800; color: var(--primary-text-color); }
+  .time-unit { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; }
+
+  .sensors-row { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; border-top: 1px solid var(--divider-color, #eee); }
+  .sensor-chip { 
+    display: inline-flex; align-items: center; background: var(--secondary-background-color, #f5f5f5); 
+    padding: 4px 10px; border-radius: 8px; font-size: 0.85rem; color: var(--primary-text-color); border: 1px solid var(--divider-color, #eee);
+  }
+  .sensor-chip ha-icon { --mdc-icon-size: 16px; margin-right: 6px; opacity: 0.7; }
+`;
+
+// --- HELPER: Generowanie HTML dla jednego pracownika ---
+function renderEmployeeHTML(hass, entityId) {
+  const statusEntity = hass.states[entityId];
+  if (!statusEntity) return '';
+
+  // Ustalanie nazw
+  const fullName = statusEntity.attributes.friendly_name.replace(' - Status', '');
+  const baseId = entityId.replace('_status', '');
+  
+  // Status
+  const state = statusEntity.state;
+  let statusClass = 'is-absent';
+  let iconName = 'mdi:account-off';
+  
+  if (state === 'Pracuje') { statusClass = 'is-working'; iconName = 'mdi:laptop'; }
+  else if (state === 'Obecny (Idle)') { statusClass = 'is-idle'; iconName = 'mdi:coffee'; }
+
+  // Czas
+  const timeEntity = hass.states[`${baseId}_czas_pracy`];
+  const timeVal = timeEntity ? Math.round(parseFloat(timeEntity.state)) : '--';
+
+  // Sensory dodatkowe
+  let sensorsHtml = '';
+  KNOWN_SENSOR_TYPES.forEach(type => {
+    const sId = `${baseId}_${type.suffix}`;
+    const sEnt = hass.states[sId];
+    if (sEnt && sEnt.state !== 'unavailable' && sEnt.state !== 'unknown') {
+      const unit = sEnt.attributes.unit_of_measurement || type.unit;
+      sensorsHtml += `
+        <div class="sensor-chip">
+          <ha-icon icon="${type.icon}"></ha-icon>
+          <span>${sEnt.state} ${unit}</span>
+        </div>`;
+    }
+  });
+
+  return `
+    <div class="emp-card">
+      <div class="header">
+        <div class="icon-box ${statusClass}"><ha-icon icon="${iconName}"></ha-icon></div>
+        <div class="info">
+          <div class="emp-name">${fullName}</div>
+          <div class="emp-status">${state}</div>
+        </div>
+        <div class="stats">
+          <div class="time-val">${timeVal}</div>
+          <div class="time-unit">MINUT</div>
+        </div>
+      </div>
+      ${sensorsHtml ? `<div class="sensors-row">${sensorsHtml}</div>` : ''}
+    </div>
+  `;
+}
+
+// ============================================================
+// 1. KARTA POJEDYNCZA (Single)
+// ============================================================
 class EmployeeCard extends HTMLElement {
   setConfig(config) {
-    if (!config.name) {
-      throw new Error('Wpisz imię pracownika w edytorze!');
-    }
+    if (!config.name) throw new Error('Podaj imię!');
     this.config = config;
   }
 
   set hass(hass) {
-    const name = this.config.name;
+    const id = this.config.name.toLowerCase().replace(/ /g, "_").replace(/ą/g,'a').replace(/ć/g,'c').replace(/ę/g,'e').replace(/ł/g,'l').replace(/ń/g,'n').replace(/ó/g,'o').replace(/ś/g,'s').replace(/ź/g,'z').replace(/ż/g,'z');
+    const entityId = `sensor.${id}_status`;
     
-    // 1. Generowanie bezpiecznego ID (Jan Kowalski -> jan_kowalski)
-    // Ta funkcja musi działać identycznie jak w Pythonie!
-    const id = name.toLowerCase().trim()
-                   .replace(/ /g, "_")
-                   .replace(/ą/g, 'a').replace(/ć/g, 'c').replace(/ę/g, 'e')
-                   .replace(/ł/g, 'l').replace(/ń/g, 'n').replace(/ó/g, 'o')
-                   .replace(/ś/g, 's').replace(/ź/g, 'z').replace(/ż/g, 'z');
-
-    // 2. Pobieranie głównych stanów
-    const statusEntity = hass.states[`sensor.${id}_status`];
-    const timeEntity = hass.states[`sensor.${id}_czas_pracy`];
-
-    // 3. Rysowanie szkieletu HTML (tylko raz)
     if (!this.content) {
-      this.innerHTML = `
-        <style>
-          ha-card { 
-            padding: 16px; 
-            display: flex; 
-            flex-direction: column; 
-            cursor: pointer; 
-            transition: transform 0.1s ease-in-out;
-            border-radius: 12px;
-          }
-          ha-card:active { transform: scale(0.98); }
-          
-          /* Górna sekcja: Ikonka, Imię, Status */
-          .header { display: flex; align-items: center; width: 100%; margin-bottom: 12px; }
-          
-          .icon-box { 
-            width: 48px; height: 48px; 
-            border-radius: 50%; 
-            display: flex; align-items: center; justify-content: center; 
-            margin-right: 16px; 
-            background: #f0f0f0; color: #555;
-            transition: background 0.3s;
-          }
-          
-          /* Kolory statusów */
-          .is-working { background: rgba(76, 175, 80, 0.15); color: #2E7D32; border: 2px solid rgba(76, 175, 80, 0.3); }
-          .is-idle { background: rgba(255, 193, 7, 0.15); color: #F57F17; border: 2px solid rgba(255, 193, 7, 0.3); }
-          .is-absent { background: rgba(244, 67, 54, 0.1); color: #C62828; }
-
-          .info-box { flex: 1; }
-          .emp-name { font-weight: 700; font-size: 1.15rem; line-height: 1.2; }
-          .emp-status { font-size: 0.9rem; opacity: 0.85; font-weight: 500; }
-          
-          .time-box { text-align: right; min-width: 70px; }
-          .time-val { font-size: 1.4rem; font-weight: 800; color: #333; }
-          .time-unit { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.6; }
-
-          /* Dolna sekcja: Chipy z sensorami */
-          .sensors-grid { 
-            display: flex; 
-            flex-wrap: wrap;
-            gap: 8px;
-            padding-top: 12px;
-            border-top: 1px solid #eee;
-          }
-          .sensor-chip {
-            display: inline-flex; 
-            align-items: center; 
-            background: #f8f9fa; 
-            padding: 4px 10px; 
-            border-radius: 8px; 
-            font-size: 0.85rem;
-            color: #444;
-            border: 1px solid #eee;
-          }
-          .sensor-chip ha-icon { 
-            --mdc-icon-size: 16px; 
-            margin-right: 6px; 
-            color: #666;
-          }
-        </style>
-        
-        <ha-card>
-          <div class="header">
-            <div class="icon-box" id="main-icon"><ha-icon icon="mdi:account"></ha-icon></div>
-            <div class="info-box">
-              <div class="emp-name"></div>
-              <div class="emp-status" id="status-text">Wczytywanie...</div>
-            </div>
-            <div class="time-box">
-              <div class="time-val" id="time-val">--</div>
-              <div class="time-unit">MINUT</div>
-            </div>
-          </div>
-          
-          <div class="sensors-grid" id="sensors-container"></div>
-        </ha-card>
-      `;
-      this.content = this.querySelector('ha-card');
-      this.querySelector('.emp-name').innerText = name;
+      this.innerHTML = `<style>${SHARED_STYLES}</style><div id="card-content"></div>`;
+      this.content = this.querySelector('#card-content');
     }
-
-    // 4. Aktualizacja Statusu
-    if (statusEntity) {
-      const state = statusEntity.state;
-      this.querySelector('#status-text').innerText = state;
-      
-      const iconBox = this.querySelector('#main-icon');
-      const haIcon = this.querySelector('#main-icon ha-icon');
-      
-      // Reset klas
-      iconBox.className = 'icon-box';
-      
-      if (state === 'Pracuje') { 
-        iconBox.classList.add('is-working'); 
-        haIcon.setAttribute('icon', 'mdi:laptop');
-      } else if (state === 'Obecny (Idle)') { 
-        iconBox.classList.add('is-idle'); 
-        haIcon.setAttribute('icon', 'mdi:coffee');
-      } else { 
-        iconBox.classList.add('is-absent'); 
-        haIcon.setAttribute('icon', 'mdi:account-off');
-      }
-    }
-
-    // 5. Aktualizacja Czasu
-    if (timeEntity) {
-      this.querySelector('#time-val').innerText = Math.round(parseFloat(timeEntity.state));
-    }
-
-    // 6. Pętla po znanych typach sensorów (Autowykrywanie)
-    const sensorsContainer = this.querySelector('#sensors-container');
-    sensorsContainer.innerHTML = ''; // Czyścimy, żeby nie dublować przy odświeżaniu
-
-    let foundAny = false;
-    KNOWN_SENSOR_TYPES.forEach(type => {
-      // Budujemy przewidywane ID: sensor.jan_temperatura
-      const sensorId = `sensor.${id}_${type.suffix}`;
-      const entity = hass.states[sensorId];
-
-      // Jeśli taka encja istnieje w HA i ma wartość
-      if (entity && entity.state !== 'unavailable' && entity.state !== 'unknown') {
-        foundAny = true;
-        const val = entity.state;
-        const unit = entity.attributes.unit_of_measurement || type.unit;
-        
-        sensorsContainer.innerHTML += `
-          <div class="sensor-chip">
-            <ha-icon icon="${type.icon}"></ha-icon>
-            <span>${val} ${unit}</span>
-          </div>
-        `;
-      }
-    });
-
-    // Jeśli brak sensorów, ukryj dolną sekcję (żeby nie było pustego paska)
-    if (!foundAny) {
-      sensorsContainer.style.display = 'none';
-    } else {
-      sensorsContainer.style.display = 'flex';
-    }
+    this.content.innerHTML = renderEmployeeHTML(hass, entityId);
   }
-
   getCardSize() { return 1; }
-
-  // Konfiguracja Edytora
   static getStubConfig() { return { name: "Jan" }; }
   static getConfigElement() { return document.createElement("employee-card-editor"); }
 }
 
-// Klasa Edytora (Formularz wpisywania imienia)
+// ============================================================
+// 2. KARTA ZBIORCZA (Dashboard - Auto)
+// ============================================================
+class EmployeeDashboard extends HTMLElement {
+  setConfig(config) {
+    this.config = config;
+    this.title = config.title || "Zespół";
+  }
+
+  set hass(hass) {
+    if (!this.content) {
+      this.innerHTML = `
+        <style>
+          ${SHARED_STYLES}
+          .dashboard-container { display: flex; flex-direction: column; }
+          .dash-title { font-size: 1.2rem; font-weight: bold; margin-bottom: 10px; color: var(--primary-text-color); padding-left: 5px; }
+        </style>
+        <div class="dash-title">${this.title}</div>
+        <div id="dashboard-content" class="dashboard-container">Ładowanie...</div>
+      `;
+      this.content = this.querySelector('#dashboard-content');
+    }
+
+    // Skanujemy system w poszukiwaniu pracowników
+    const employees = Object.keys(hass.states)
+      .filter(eid => eid.startsWith('sensor.') && eid.endsWith('_status'))
+      .sort();
+
+    if (employees.length === 0) {
+      this.content.innerHTML = "<div style='padding:20px;text-align:center;opacity:0.6'>Brak pracowników.<br>Dodaj ich w panelu Employee Manager.</div>";
+      return;
+    }
+
+    // Generujemy HTML dla każdego znalezionego pracownika
+    this.content.innerHTML = employees.map(eid => renderEmployeeHTML(hass, eid)).join('');
+  }
+  getCardSize() { return 3; }
+}
+
+// --- EDYTOR DLA POJEDYNCZEJ KARTY ---
 class EmployeeCardEditor extends HTMLElement {
   setConfig(config) { this._config = config; this.render(); }
   render() {
     if (!this.innerHTML) {
       this.innerHTML = `
-        <div class="card-config">
-          <div class="input-container" style="padding: 20px 0;">
-            <label style="display:block; margin-bottom: 8px; font-weight:bold;">Imię Pracownika</label>
-            <input type="text" id="name-input" placeholder="Wpisz imię z konfiguracji Add-onu" style="width: 95%; padding: 10px; border: 1px solid #ccc; border-radius: 4px;">
-            <p style="color: gray; font-size: 0.8em; margin-top: 5px;">Wielkość liter nie ma znaczenia.</p>
-          </div>
+        <div class="card-config" style="padding:20px;">
+          <label style="font-weight:bold">Imię Pracownika</label>
+          <input type="text" id="name-input" style="width:100%; padding:8px; margin-top:5px;">
         </div>`;
-      this.querySelector('#name-input').addEventListener('input', (e) => this._valueChanged(e.target.value));
+      this.querySelector('#name-input').addEventListener('input', (e) => 
+        this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: { ...this._config, name: e.target.value } }, bubbles: true, composed: true }))
+      );
     }
     this.querySelector('#name-input').value = this._config.name || '';
   }
-  _valueChanged(newVal) {
-    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: { ...this._config, name: newVal } }, bubbles: true, composed: true }));
-  }
 }
 
+// --- REJESTRACJA ---
 customElements.define('employee-card-editor', EmployeeCardEditor);
 customElements.define('employee-card', EmployeeCard);
+customElements.define('employee-dashboard', EmployeeDashboard);
 
-// Rejestracja w menu
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "employee-card",
-  name: "Karta Pracownika (Auto)",
+  name: "Pracownik (Pojedynczy)",
+  description: "Karta jednego pracownika"
+});
+window.customCards.push({
+  type: "employee-dashboard",
+  name: "Panel Zespołu (AUTO)",
   preview: true,
-  description: "Automatycznie wykrywa sensory pracownika"
+  description: "Automatycznie wyświetla wszystkich pracowników"
 });
