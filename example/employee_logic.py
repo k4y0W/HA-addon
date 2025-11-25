@@ -12,12 +12,18 @@ HEADERS = {
 }
 DATA_FILE = "/data/employees.json"
 
-def log(message): print(f"[Logic] {message}", flush=True)
+def log(message):
+    print(f"[Logic] {message}", flush=True)
 
+# --- POPRAWIONA FUNKCJA (BŁĄD SKŁADNI NAPRAWIONY) ---
 def get_data():
-    if not os.path.exists(DATA_FILE): return []
-    try: with open(DATA_FILE, 'r') as f: return json.load(f)
-    except: return []
+    if not os.path.exists(DATA_FILE):
+        return []
+    try:
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return []
 
 def get_state_full(entity_id):
     if not entity_id: return None
