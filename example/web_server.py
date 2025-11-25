@@ -46,7 +46,6 @@ BLOCKED_PREFIXES = [
 ]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
 
-# --- POPRAWIONE FUNKCJE (Naprawiony SyntaxError) ---
 def load_employees():
     if not os.path.exists(DATA_FILE):
         return []
@@ -137,7 +136,6 @@ def register_lovelace_resource():
         else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
-# --- HTML ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -167,7 +165,7 @@ HTML_PAGE = """
         <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
             <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
             <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
-            <li class="nav-item"><button class="nav-link text-success" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj w HA</button></li>
+            <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Zainstaluj Kartę</button></li>
         </ul>
     </div>
 
@@ -193,7 +191,7 @@ HTML_PAGE = """
                                         <span>Przypisz Czujniki</span>
                                         <span class="badge bg-light text-dark fw-normal border" id="count-badge">0 wybranych</span>
                                     </label>
-                                    <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch" placeholder="🔍 Filtruj (np. 'temp', 'biuro')...">
+                                    <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch" placeholder="🔍 Filtruj...">
                                     
                                     <div class="sensor-list-container border rounded p-2 bg-light" style="max-height: 400px; overflow-y: auto;">
                                         <div id="sensorList" class="d-flex flex-column gap-2">
@@ -232,16 +230,34 @@ HTML_PAGE = """
         countBadge.innerText = count + " wybranych";
     }
 
+    // --- TO JEST TA NOWA, SPRYTNA FUNKCJA INSTALACJI ---
     async function installCard() {
         const btn = document.getElementById('tab-install');
         const originalText = btn.innerHTML;
-        btn.innerHTML = '⏳ Próbuję...';
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Działam...';
+        
         try {
             const res = await fetch('api/install_card', { method: 'POST' });
             const data = await res.json();
-            if(data.success) alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
-            else prompt("Automatyczna instalacja nie zadziałała.\\nSkopiuj ten link i dodaj go ręcznie w Ustawienia -> Pulpity -> Zasoby:", "/local/employee-card.js");
-        } catch (e) { alert("Błąd połączenia."); }
+            
+            if(data.success) {
+                alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
+            } else {
+                // AUTOMATYCZNA KOPIA + PRZEKIEROWANIE
+                navigator.clipboard.writeText("/local/employee-card.js");
+                
+                if(confirm("⚠️ Automatyczna instalacja zablokowana przez HA.\\n\\n✅ Skopiowałem link do schowka: /local/employee-card.js\\n\\nCzy chcesz otworzyć Ustawienia Zasobów, żeby go tam wkleić?")) {
+                    // Otwórz nową kartę z ustawieniami zasobów
+                    window.open("/config/lovelace/resources", "_blank");
+                }
+            }
+        } catch (e) { 
+            // Fallback na błąd sieci
+            navigator.clipboard.writeText("/local/employee-card.js");
+            if(confirm("Błąd połączenia.\\nSkopiowałem link. Czy otworzyć ustawienia zasobów?")) {
+                window.open("/config/lovelace/resources", "_blank");
+            }
+        }
         btn.innerHTML = originalText;
     }
 
@@ -255,7 +271,6 @@ HTML_PAGE = """
 
             const div = document.createElement('div');
             div.className = 'sensor-tile rounded p-2 d-flex align-items-center';
-            
             let icon = "mdi-eye-circle-outline";
             if (s.main_label === "Temperatura") icon = "mdi-thermometer";
             else if (s.main_label === "Wilgotność") icon = "mdi-water-percent";
@@ -379,14 +394,12 @@ def api_monitor():
                 friendly_name = attrs.get('friendly_name', entity_id)
                 dc = attrs.get('device_class')
                 unit = attrs.get('unit_of_measurement', '')
-                
                 label = friendly_name
                 if dc in PRETTY_NAMES: label = PRETTY_NAMES[dc]
                 elif unit == "W": label = "Moc"
                 elif unit == "V": label = "Napięcie"
                 elif unit == "hPa": label = "Ciśnienie"
                 elif unit == "%": label = "Wilgotność"
-
                 meas.append({"label": label, "value": val, "unit": unit})
             except: pass
         res.append({"name": emp['name'], "status": status, "work_time": time, "measurements": meas})
