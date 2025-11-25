@@ -3,6 +3,7 @@ import time
 import requests
 import json
 import sys
+from employee_map import SENSOR_MAP # Import mapy
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 API_URL = "http://supervisor/core/api"
@@ -10,93 +11,70 @@ HEADERS = {
     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
     "Content-Type": "application/json",
 }
-
-SENSOR_MAP = {
-    "Temperatura": "sensor.light_sensor_temperatura",
-    "Wilgotnosc": "sensor.light_sensor_wilgotnosc",
-    "Cisnienie": "sensor.light_sensor_cisnienie"
-}
+DATA_FILE = "/data/employees.json"
 
 def log(message):
-    print(f"[EmployeeManager] {message}", flush=True)
+    print(f"[EmployeeLogic] {message}", flush=True)
 
-def get_options():
+def get_employees_from_db():
+    if not os.path.exists(DATA_FILE):
+        return []
     try:
-        with open("/data/options.json", "r") as f:
+        with open(DATA_FILE, 'r') as f:
             return json.load(f)
-    except Exception as e:
-        log(f"Error reading options: {e}")
-        return {"employees": []}
+    except:
+        return []
 
 def get_ha_state(entity_id):
-    if not entity_id:
-        return None
+    if not entity_id: return None
     try:
         url = f"{API_URL}/states/{entity_id}"
         response = requests.get(url, headers=HEADERS)
         if response.status_code == 200:
-            data = response.json()
-            return data.get("state")
-    except Exception as e:
-        log(f"Error fetching {entity_id}: {e}")
+            return response.json().get("state")
+    except:
+        pass
     return None
 
-def update_employee_sensor(name, label, value, unit, icon):
-    safe_name = name.lower().replace(" ", "_")
-    
-    # Tworzymy sensor w HA
-    entity_id = f"sensor.{safe_name}_wybrany_pomiar"
-    
-    state_data = {
+def update_sensor(safe_name, suffix, value, friendly_name, unit, icon):
+    entity_id = f"sensor.{safe_name}_{suffix}"
+    payload = {
         "state": value,
         "attributes": {
-            "friendly_name": f"{name} - {label}",
+            "friendly_name": friendly_name,
             "unit_of_measurement": unit,
             "icon": icon
         }
     }
-    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json=state_data)
+    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json=payload)
 
 def main():
-    log("Startuję logikę z listą wyboru...")
+    log("Startuję logikę opartą o bazę danych JSON...")
 
     while True:
-        options = get_options()
-        employees = options.get("employees", [])
+        employees = get_employees_from_db()
 
         for emp in employees:
             name = emp['name']
-            
-            # 1. Pobieramy to, co wybrał User (np. "Temperatura")
-            wybor_usera = emp.get('typ_pomiaru')
-            
-            # 2. Tłumaczymy to na ID sensora (z mapy na górze)
-            real_sensor_id = SENSOR_MAP.get(wybor_usera)
+            assigned_sensors = emp.get('sensors', [])
+            safe_name = name.lower().replace(" ", "_")
 
-            if not real_sensor_id:
-                log(f"Nie znaleziono mapowania dla: {wybor_usera}")
-                continue
+            # Dla każdego przypisanego czujnika (np. Temperatura, Wilgotnosc)
+            for sensor_human_name in assigned_sensors:
+                
+                # Pobierz dane techniczne z mapy
+                sensor_def = SENSOR_MAP.get(sensor_human_name)
+                if not sensor_def: continue
 
-            # 3. Pobieramy wartość z HA
-            value = get_ha_state(real_sensor_id)
-            
-            # 4. Ustawiamy jednostki i ikony zależnie od wyboru (dla bajeru)
-            unit = ""
-            icon = "mdi:eye"
-            
-            if wybor_usera == "Temperatura":
-                unit = "°C"
-                icon = "mdi:thermometer"
-            elif wybor_usera == "Wilgotnosc":
-                unit = "%"
-                icon = "mdi:water-percent"
-            elif wybor_usera == "Cisnienie":
-                unit = "hPa"
-                icon = "mdi:gauge"
+                real_id = sensor_def['entity_id']
+                val = get_ha_state(real_id)
 
-            # 5. Wysyłamy do HA
-            if value:
-                update_employee_sensor(name, wybor_usera, value, unit, icon)
+                if val:
+                    # Tworzymy encję w HA: sensor.jan_temperatura
+                    suffix = sensor_human_name.lower()
+                    friendly = f"{name} - {sensor_human_name}"
+                    
+                    update_sensor(safe_name, suffix, val, friendly, sensor_def['unit'], sensor_def['icon'])
 
         time.sleep(10)
 
