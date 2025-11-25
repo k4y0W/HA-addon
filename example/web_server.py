@@ -47,50 +47,60 @@ def get_clean_sensors():
         if resp.status_code == 200:
             all_states = resp.json()
             
+            # Pobieramy listę obecnych pracowników, żeby wykluczyć ich sensory
+            employees = load_employees()
+            emp_names = [e['name'].lower() for e in employees]
+
             for entity in all_states:
                 eid = entity['entity_id']
                 attrs = entity.get("attributes", {})
                 friendly_name = attrs.get("friendly_name", eid)
                 
                 # 1. FILTROWANIE ŚMIECI
+                # Odrzucamy sensory systemowe, automatyzacje, sceny itp.
                 if not (eid.startswith("sensor.") or eid.startswith("binary_sensor.") or eid.startswith("input_boolean.")):
                     continue
                 
-                # Ukrywamy sensory stworzone przez nasz dodatek (żeby nie przypisać Pawła do Pawła)
-                if eid.endswith("_status") or eid.endswith("_czas_pracy") or "_wybrany_pomiar" in eid:
+                # Odrzucamy sensory stworzone przez nasz dodatek!
+                # (Kończą się na _status, _czas_pracy lub mają format "Imie - Cos")
+                if eid.endswith("_status") or eid.endswith("_czas_pracy"):
+                    continue
+                if " - " in friendly_name: # Wykrywanie formatu "Jan - Temperatura"
                     continue
 
                 # 2. ŁADNE NAZWY (CLEANING)
                 device_class = attrs.get("device_class")
                 unit = attrs.get("unit_of_measurement", "")
                 
-                main_label = friendly_name 
+                # Ustalamy główną nazwę (Nagłówek kafelka)
+                main_label = friendly_name # Domyślnie stara nazwa
                 
-                # Próba ustalenia krótkiej kategorii
+                # Jeśli znamy klasę urządzenia, dajemy ładną polską nazwę
                 if device_class in PRETTY_NAMES:
                     main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
                 elif unit == "kWh": main_label = "Energia"
-                elif unit == "hPa": main_label = "Ciśnienie"
-                elif unit == "%": main_label = "Procenty/Wilgotność"
+                
+                # Jeśli nazwa jest bardzo długa, a nie dopasowaliśmy klasy, zostawiamy starą
                 
                 sensors.append({
                     "id": eid,
-                    "main_label": main_label,
-                    "sub_label": friendly_name,
+                    "main_label": main_label,       # np. "Temperatura"
+                    "sub_label": friendly_name,     # np. "Air Purifier Indoor Temp" (jako kontekst)
                     "unit": unit,
                     "state": entity.get("state", "-"),
                     "device_class": device_class
                 })
                 
-            # Sortujemy: Najpierw typ (main_label), potem nazwa
+            # Sortujemy: Najpierw typ (main_label), potem źródło (sub_label)
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
             
     except: pass
     return sensors
 
 def get_ha_state(entity_id):
+    # ... (bez zmian)
     try:
         resp = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
         if resp.status_code == 200:
@@ -113,7 +123,7 @@ HTML_PAGE = """
     <style>
         body { background-color: #f8f9fa; padding: 20px; font-family: 'Segoe UI', sans-serif; }
         
-        /* Styl kafelków czujników */
+        /* Ulepszony kafelek czujnika */
         .sensor-tile {
             cursor: pointer;
             transition: all 0.2s;
@@ -134,6 +144,7 @@ HTML_PAGE = """
         .tile-sub { font-size: 0.75rem; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .tile-val { font-size: 0.85rem; font-weight: 600; color: #0d6efd; margin-left: auto; }
         
+        /* Kropki statusu */
         .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
         .bg-working { background-color: #28a745; }
         .bg-idle { background-color: #ffc107; }
@@ -207,28 +218,32 @@ HTML_PAGE = """
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     const ALL_SENSORS = {{ all_sensors | tojson }};
+    
     const chkContainer = document.getElementById('sensorList');
     const countBadge = document.getElementById('count-badge');
-
-    function updateCount() { 
+    
+    function updateCount() {
         const count = document.querySelectorAll('#sensorList input:checked').length;
         countBadge.innerText = count + " wybranych";
     }
 
     function renderSensorList(filterText = "") {
         chkContainer.innerHTML = "";
-        if (!ALL_SENSORS || ALL_SENSORS.length === 0) { 
-            chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów.</div>'; 
-            return; 
+        
+        if (!ALL_SENSORS || ALL_SENSORS.length === 0) {
+            chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak dostępnych sensorów.</div>';
+            return;
         }
 
         ALL_SENSORS.forEach(s => {
+            // Filtrowanie po nazwie, ID lub typie
             const searchStr = (s.name + s.id + s.main_label).toLowerCase();
             if (filterText && !searchStr.includes(filterText.toLowerCase())) return;
 
             const div = document.createElement('div');
             div.className = 'sensor-tile rounded p-2 d-flex align-items-center';
             
+            // Dobór ikony
             let icon = "mdi-eye-circle-outline";
             if (s.main_label === "Temperatura") icon = "mdi-thermometer";
             else if (s.main_label === "Wilgotność") icon = "mdi-water-percent";
@@ -236,6 +251,7 @@ HTML_PAGE = """
             else if (s.main_label === "Moc") icon = "mdi-lightning-bolt";
             else if (s.main_label === "Bateria") icon = "mdi-battery";
 
+            // HTML Kafelka
             div.innerHTML = `
                 <div class="me-3 d-flex align-items-center justify-content-center bg-light rounded-circle" style="width:36px; height:36px;">
                     <i class="mdi ${icon} fs-5 text-secondary"></i>
@@ -245,14 +261,18 @@ HTML_PAGE = """
                     <div class="tile-sub text-truncate" title="${s.sub_label}">${s.sub_label}</div>
                 </div>
                 <div class="tile-val">${s.state} <span style="font-size:0.7em">${s.unit}</span></div>
+                
                 <input class="form-check-input d-none" type="checkbox" value="${s.id}" id="chk_${s.id}">
             `;
+            
+            // Klikanie
             div.addEventListener('click', (e) => {
                 const chk = div.querySelector('input');
                 chk.checked = !chk.checked;
                 if(chk.checked) div.classList.add('selected'); else div.classList.remove('selected');
                 updateCount();
             });
+            
             chkContainer.appendChild(div);
         });
     }
@@ -274,11 +294,11 @@ HTML_PAGE = """
                             <div class="d-flex align-items-center mb-3">
                                 <div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
                                 <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small></div>
-                                <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div>
+                                <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted">MIN</div></div>
                             </div>
                             <div class="row g-2">${emp.measurements.map(m => 
                                 `<div class="col-6"><div class="p-2 border rounded bg-light text-center">
-                                    <small class="text-muted d-block text-truncate">${m.label}</small>
+                                    <small class="text-muted d-block">${m.label}</small>
                                     <strong>${m.value} ${m.unit}</strong>
                                 </div></div>`
                             ).join('')}</div>
@@ -302,10 +322,21 @@ HTML_PAGE = """
         const name = document.getElementById('empName').value;
         const selected = [];
         document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
-        if(selected.length === 0) return alert("Wybierz czujnik!");
+        if(selected.length === 0) return alert("Wybierz chociaż jeden czujnik!");
+        
+        // Dodajemy automatyczne wykrywanie gniazdka (dla logiki mocy)
+        // Prosta logika: pierwsze zaznaczone gniazdko (W) staje się głównym
+        // W wersji PRO można by dodać osobny select
+        let powerSensor = ""; 
+        // (W tym uproszczeniu wysyłamy po prostu listę, a Python sam znajdzie 'W')
+
         await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, sensors: selected}) });
         document.getElementById('empName').value = '';
-        renderSensorList(); loadConfig(); refreshMonitor(); alert('Zapisano!');
+        document.getElementById('sensorSearch').value = '';
+        renderSensorList(); 
+        loadConfig();
+        refreshMonitor();
+        alert('Zapisano!');
     };
 
     window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitor(); } }
@@ -318,10 +349,9 @@ HTML_PAGE = """
 
 @app.route('/')
 def index():
-    # Przekazujemy wyczyszczoną listę sensorów do HTML
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
-# API endpoints (Get, Post, Delete, Monitor) - BEZ ZMIAN
+# API endpoints (Get, Post, Delete, Monitor) - zostają takie same jak w poprzednich krokach
 @app.route('/api/employees', methods=['GET'])
 def api_get(): return jsonify(load_employees())
 
@@ -353,23 +383,14 @@ def api_monitor():
         meas = []
         for entity_id in emp.get('sensors', []):
             val = get_ha_state(entity_id)
+            # Próbujemy odtworzyć ładną nazwę dla dashboardu
+            # (W idealnym świecie cachowalibyśmy to, ale tu zrobimy prosto)
             try:
                 r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
                 data = r.json()
-                
-                # Używamy tej samej logiki co w get_clean_sensors żeby nazwy były spójne
-                attrs = data['attributes']
-                friendly_name = attrs.get('friendly_name', entity_id)
-                dc = attrs.get('device_class')
-                unit = attrs.get('unit_of_measurement', '')
-                
-                label = friendly_name
-                if dc in PRETTY_NAMES: label = PRETTY_NAMES[dc]
-                elif unit == "W": label = "Moc"
-                elif unit == "V": label = "Napięcie"
-                elif unit == "hPa": label = "Ciśnienie"
-                elif unit == "%": label = "Wilgotność"
-
+                unit = data['attributes'].get('unit_of_measurement', '')
+                dc = data['attributes'].get('device_class')
+                label = PRETTY_NAMES.get(dc, data['attributes'].get('friendly_name'))
                 meas.append({"label": label, "value": val, "unit": unit})
             except: pass
         
