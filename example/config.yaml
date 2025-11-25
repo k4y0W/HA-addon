@@ -1,5 +1,5 @@
 name: Employee Manager
-version: "1.2.2"
+version: "1.2.3"
 slug: employee_manager
 description: System zarządzania pracownikami
 url: https://github.com/k4y0W/HA-addon
@@ -7,6 +7,8 @@ startup: application
 boot: auto
 init: false
 homeassistant_api: true
+ingress: true
+panel_icon: mdi:account-group
 map:
   - config:rw
 arch:
