@@ -176,7 +176,3 @@ def delete_employee(index):
         del employees[index]
         save_employees(employees)
     return jsonify({"status": "ok"})
-
-if __name__ == '__main__':
-    # Uruchamiamy na porcie Ingress
-    app.run(host='0.0.0.0', port=8099)

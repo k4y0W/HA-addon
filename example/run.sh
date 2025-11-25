@@ -1,10 +1,7 @@
 #!/usr/bin/with-contenv bashio
 
-echo "Uruchamiam Employee Managera..."
+echo "Uruchamiam logikę pracownika..."
+python3 /employee_logic.py & 
+echo "Uruchamiam Gunicorn..."
 
-python3 /employee_logic.py &
-python3 /web_server.py
-
-while true; do 
-    sleep 30
-done
+exec python3 -m gunicorn web_server:app --bind 0.0.0.0:8099 --workers 1 --log-level info
