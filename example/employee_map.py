@@ -1,5 +1,3 @@
-# Definicja typów czujników (nie konkretnych urządzeń, ale kategorii)
-# Klucz = to co zapisujemy w bazie JSON
 SENSOR_TYPES = {
     "temperatura": {
         "label": "Temperatura",
@@ -45,5 +43,4 @@ SENSOR_TYPES = {
     }
 }
 
-# Stara mapa dla kompatybilności (opcjonalnie, jeśli gdzieś jeszcze używasz SENSOR_MAP)
 SENSOR_MAP = SENSOR_TYPES
