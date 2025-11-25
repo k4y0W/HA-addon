@@ -4,99 +4,93 @@ import requests
 import json
 import sys
 
+# Usunięto import employee_map, bo już go nie potrzebujemy w logice backendowej
+# SENSOR_TYPES było potrzebne tylko do UI
+
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 API_URL = "http://supervisor/core/api"
 HEADERS = {
     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
     "Content-Type": "application/json",
 }
+DATA_FILE = "/data/employees.json"
 
-SENSOR_MAP = {
-    "Temperatura": "sensor.light_sensor_temperatura",
-    "Wilgotnosc": "sensor.light_sensor_wilgotnosc",
-    "Cisnienie": "sensor.light_sensor_cisnienie"
-}
+def log(message): print(f"[Logic] {message}", flush=True)
 
-def log(message):
-    print(f"[EmployeeManager] {message}", flush=True)
-
-def get_options():
+def get_data():
+    if not os.path.exists(DATA_FILE): return []
     try:
-        with open("/data/options.json", "r") as f:
-            return json.load(f)
-    except Exception as e:
-        log(f"Error reading options: {e}")
-        return {"employees": []}
+        with open(DATA_FILE, 'r') as f: return json.load(f)
+    except: return []
 
-def get_ha_state(entity_id):
-    if not entity_id:
-        return None
+def get_state_full(entity_id):
+    if not entity_id: return None
     try:
-        url = f"{API_URL}/states/{entity_id}"
-        response = requests.get(url, headers=HEADERS)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("state")
-    except Exception as e:
-        log(f"Error fetching {entity_id}: {e}")
+        r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
+        if r.status_code == 200: return r.json()
+    except: pass
     return None
 
-def update_employee_sensor(name, label, value, unit, icon):
-    safe_name = name.lower().replace(" ", "_")
-    
-    # Tworzymy sensor w HA
-    entity_id = f"sensor.{safe_name}_wybrany_pomiar"
-    
-    state_data = {
-        "state": value,
-        "attributes": {
-            "friendly_name": f"{name} - {label}",
-            "unit_of_measurement": unit,
-            "icon": icon
-        }
-    }
-    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json=state_data)
+def set_state(entity_id, state, friendly, icon, unit=None):
+    pl = {"state": state, "attributes": {"friendly_name": friendly, "icon": icon}}
+    if unit: pl["attributes"]["unit_of_measurement"] = unit
+    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json=pl)
 
 def main():
-    log("Startuję logikę z listą wyboru...")
+    log("Startuję logikę (Direct ID Mode)...")
+    work_counters = {}
 
     while True:
-        options = get_options()
-        employees = options.get("employees", [])
-
-        for emp in employees:
+        emps = get_data()
+        for emp in emps:
             name = emp['name']
+            safe = name.lower().replace(" ", "_")
             
-            # 1. Pobieramy to, co wybrał User (np. "Temperatura")
-            wybor_usera = emp.get('typ_pomiaru')
+            # --- 1. STATUS PRACY ---
+            # Szukamy sensora mocy (W) w liście przypisanych
+            power_val = 0
+            assigned_ids = emp.get('sensors', [])
             
-            # 2. Tłumaczymy to na ID sensora (z mapy na górze)
-            real_sensor_id = SENSOR_MAP.get(wybor_usera)
+            for eid in assigned_ids:
+                data = get_state_full(eid)
+                if data:
+                    unit = data['attributes'].get('unit_of_measurement', '')
+                    if unit == 'W': 
+                        try: power_val = float(data['state'])
+                        except: pass
+                        break # Znaleziono gniazdko
+            
+            if name not in work_counters: work_counters[name] = 0.0
+            
+            status = "Obecny (Idle)"
+            # Próg 20W
+            if power_val > 20.0:
+                status = "Pracuje"
+                work_counters[name] += (10/60)
+            elif power_val == 0:
+                status = "Nieobecny"
 
-            if not real_sensor_id:
-                log(f"Nie znaleziono mapowania dla: {wybor_usera}")
-                continue
+            set_state(f"sensor.{safe}_status", status, f"{name} - Status", "mdi:account")
+            set_state(f"sensor.{safe}_czas_pracy", round(work_counters[name], 1), f"{name} - Czas", "mdi:clock", "min")
 
-            # 3. Pobieramy wartość z HA
-            value = get_ha_state(real_sensor_id)
-            
-            # 4. Ustawiamy jednostki i ikony zależnie od wyboru (dla bajeru)
-            unit = ""
-            icon = "mdi:eye"
-            
-            if wybor_usera == "Temperatura":
-                unit = "°C"
-                icon = "mdi:thermometer"
-            elif wybor_usera == "Wilgotnosc":
-                unit = "%"
-                icon = "mdi:water-percent"
-            elif wybor_usera == "Cisnienie":
-                unit = "hPa"
-                icon = "mdi:gauge"
-
-            # 5. Wysyłamy do HA
-            if value:
-                update_employee_sensor(name, wybor_usera, value, unit, icon)
+            # --- 2. KOPIOWANIE POMIARÓW ---
+            for eid in assigned_ids:
+                data = get_state_full(eid)
+                if data:
+                    val = data['state']
+                    unit = data['attributes'].get('unit_of_measurement', '')
+                    friendly = data['attributes'].get('friendly_name', eid)
+                    
+                    # Ustalamy suffix na podstawie jednostki (dla porządku w HA)
+                    suffix = "sensor"
+                    icon = "mdi:eye"
+                    if unit == "°C": suffix = "temperatura"; icon="mdi:thermometer"
+                    elif unit == "%": suffix = "wilgotnosc"; icon="mdi:water-percent"
+                    elif unit == "hPa": suffix = "cisnienie"; icon="mdi:gauge"
+                    elif unit == "W": suffix = "moc"; icon="mdi:lightning-bolt"
+                    
+                    # Tworzymy sensor wirtualny
+                    set_state(f"sensor.{safe}_{suffix}", val, f"{name} - {friendly}", icon, unit)
 
         time.sleep(10)
 
