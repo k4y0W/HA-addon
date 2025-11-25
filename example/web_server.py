@@ -6,17 +6,7 @@ from flask import Flask, request, jsonify, render_template_string
 from employee_map import SENSOR_TYPES
 
 DATA_FILE = "/data/employees.json"
-OPTIONS_FILE = "/data/options.json"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
-USER_TOKEN = ""
-
-try:
-    with open(OPTIONS_FILE, 'r') as f:
-        opts = json.load(f)
-        USER_TOKEN = opts.get("ha_token", "")
-except:
-    pass
-
 API_URL = "http://supervisor/core/api"
 HEADERS = {
     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
@@ -25,6 +15,7 @@ HEADERS = {
 
 app = Flask(__name__)
 
+# --- SŁOWNIK TŁUMACZEŃ ---
 PRETTY_NAMES = {
     "temperature": "Temperatura",
     "humidity": "Wilgotność",
@@ -39,25 +30,17 @@ PRETTY_NAMES = {
     "illuminance": "Jasność"
 }
 
-BLOCKED_PREFIXES = [
-    "sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", 
-    "sensor.zone", "sensor.automation", "sensor.script", 
-    "update.", "person.", "zone.", "sun."
-]
+BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun."]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
 
 def load_employees():
-    if not os.path.exists(DATA_FILE):
-        return []
+    if not os.path.exists(DATA_FILE): return []
     try:
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return []
+        with open(DATA_FILE, 'r') as f: return json.load(f)
+    except: return []
 
 def save_employees(data):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+    with open(DATA_FILE, 'w') as f: json.dump(data, f, indent=4)
 
 def get_clean_sensors():
     sensors = []
@@ -83,7 +66,6 @@ def get_clean_sensors():
                 if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
-                elif unit == "kWh": main_label = "Energia"
                 elif unit == "hPa": main_label = "Ciśnienie"
                 elif unit == "%": main_label = "Wilgotność"
                 
@@ -96,8 +78,7 @@ def get_clean_sensors():
                     "device_class": device_class
                 })
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
-    except:
-        pass
+    except: pass
     return sensors
 
 def get_ha_state(entity_id):
@@ -105,37 +86,12 @@ def get_ha_state(entity_id):
         resp = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
         if resp.status_code == 200:
             state = resp.json().get("state")
-            try:
-                return str(round(float(state), 1))
-            except:
-                return state
-    except:
-        pass
+            try: return str(round(float(state), 1))
+            except: return state
+    except: pass
     return "-"
 
-def register_lovelace_resource():
-    CARD_URL = "/local/employee-card.js"
-    token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
-    install_headers = {
-        "Authorization": f"Bearer {token_to_use}",
-        "Content-Type": "application/json",
-    }
-    try:
-        get_resp = requests.get(f"{API_URL}/lovelace/resources", headers=install_headers)
-        if get_resp.status_code in [401, 403, 404]:
-            return False, "Brak uprawnień! Podaj 'Token Długoterminowy' w konfiguracji."
-        
-        resources = get_resp.json()
-        for res in resources:
-            if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
-
-        payload = {"url": CARD_URL, "type": "module"}
-        post_resp = requests.post(f"{API_URL}/lovelace/resources", headers=install_headers, json=payload)
-        
-        if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
-        else: return False, f"Błąd API: {post_resp.text}"
-    except Exception as e: return False, str(e)
-
+# --- HTML (Frontend) ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -165,7 +121,7 @@ HTML_PAGE = """
         <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
             <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
             <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
-            <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Zainstaluj Kartę</button></li>
+            <li class="nav-item"><button class="nav-link text-success fw-bold" onclick="showInstallInfo()"><i class="mdi mdi-information-outline"></i> Instalacja Karty</button></li>
         </ul>
     </div>
 
@@ -205,7 +161,6 @@ HTML_PAGE = """
                         </div>
                     </div>
                 </div>
-
                 <div class="col-lg-5">
                     <div class="card shadow-sm">
                         <div class="card-header bg-white fw-bold">Lista Pracowników</div>
@@ -219,46 +174,52 @@ HTML_PAGE = """
     </div>
 </div>
 
+<div class="modal fade" id="installModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-light">
+        <h5 class="modal-title">Instalacja Karty Lovelace</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p>Plik karty został już utworzony automatycznie. Aby jej użyć:</p>
+        <ol>
+            <li>Skopiuj ten link: <br>
+                <div class="input-group mt-1 mb-3">
+                    <input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput" readonly>
+                    <button class="btn btn-outline-primary" onclick="copyLink()">Kopiuj</button>
+                </div>
+            </li>
+            <li>Przejdź do: <b>Ustawienia → Pulpity → Zasoby</b></li>
+            <li>Kliknij <b>Dodaj zasób</b> i wklej link.</li>
+        </ol>
+        <a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100"><i class="mdi mdi-open-in-new"></i> Otwórz Ustawienia Zasobów</a>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     const ALL_SENSORS = {{ all_sensors | tojson }};
     const chkContainer = document.getElementById('sensorList');
     const countBadge = document.getElementById('count-badge');
+    const installModal = new bootstrap.Modal(document.getElementById('installModal'));
+
+    function showInstallInfo() {
+        installModal.show();
+    }
+
+    function copyLink() {
+        const copyText = document.getElementById("linkInput");
+        copyText.select();
+        navigator.clipboard.writeText(copyText.value);
+        alert("Skopiowano do schowka: " + copyText.value);
+    }
 
     function updateCount() { 
         const count = document.querySelectorAll('#sensorList input:checked').length;
         countBadge.innerText = count + " wybranych";
-    }
-
-    // --- TO JEST TA NOWA, SPRYTNA FUNKCJA INSTALACJI ---
-    async function installCard() {
-        const btn = document.getElementById('tab-install');
-        const originalText = btn.innerHTML;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Działam...';
-        
-        try {
-            const res = await fetch('api/install_card', { method: 'POST' });
-            const data = await res.json();
-            
-            if(data.success) {
-                alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
-            } else {
-                // AUTOMATYCZNA KOPIA + PRZEKIEROWANIE
-                navigator.clipboard.writeText("/local/employee-card.js");
-                
-                if(confirm("⚠️ Automatyczna instalacja zablokowana przez HA.\\n\\n✅ Skopiowałem link do schowka: /local/employee-card.js\\n\\nCzy chcesz otworzyć Ustawienia Zasobów, żeby go tam wkleić?")) {
-                    // Otwórz nową kartę z ustawieniami zasobów
-                    window.open("/config/lovelace/resources", "_blank");
-                }
-            }
-        } catch (e) { 
-            // Fallback na błąd sieci
-            navigator.clipboard.writeText("/local/employee-card.js");
-            if(confirm("Błąd połączenia.\\nSkopiowałem link. Czy otworzyć ustawienia zasobów?")) {
-                window.open("/config/lovelace/resources", "_blank");
-            }
-        }
-        btn.innerHTML = originalText;
     }
 
     function renderSensorList(filterText = "") {
@@ -357,6 +318,7 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
+# --- API ---
 @app.route('/api/employees', methods=['GET'])
 def api_get(): return jsonify(load_employees())
 
@@ -378,34 +340,32 @@ def api_del(i):
 
 @app.route('/api/monitor', methods=['GET'])
 def api_monitor():
+    # Tutaj tylko uproszczony odczyt, bo logika robi resztę
     emps = load_employees()
     res = []
     for emp in emps:
         safe = emp['name'].lower().replace(" ","_")
         status = get_ha_state(f"sensor.{safe}_status") or "N/A"
         time = get_ha_state(f"sensor.{safe}_czas_pracy") or "0"
+        
         meas = []
         for entity_id in emp.get('sensors', []):
             val = get_ha_state(entity_id)
             try:
+                # Próba pobrania jednostki do wyświetlania
                 r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
                 data = r.json()
+                unit = data['attributes'].get('unit_of_measurement', '')
+                
+                # Ustalanie etykiety
                 attrs = data['attributes']
-                friendly_name = attrs.get('friendly_name', entity_id)
                 dc = attrs.get('device_class')
-                unit = attrs.get('unit_of_measurement', '')
-                label = friendly_name
-                if dc in PRETTY_NAMES: label = PRETTY_NAMES[dc]
-                elif unit == "W": label = "Moc"
+                friendly_name = attrs.get('friendly_name', entity_id)
+                label = PRETTY_NAMES.get(dc, friendly_name)
+                if unit == "W": label = "Moc"
                 elif unit == "V": label = "Napięcie"
-                elif unit == "hPa": label = "Ciśnienie"
-                elif unit == "%": label = "Wilgotność"
+
                 meas.append({"label": label, "value": val, "unit": unit})
             except: pass
         res.append({"name": emp['name'], "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
-
-@app.route('/api/install_card', methods=['POST'])
-def api_install_card():
-    success, msg = register_lovelace_resource()
-    return jsonify({"success": success, "message": msg})
