@@ -1,17 +1,49 @@
-SENSOR_MAP = {
-    "Temperatura": {
-        "entity_id": "sensor.light_sensor_temperatura",
+# Definicja typów czujników (nie konkretnych urządzeń, ale kategorii)
+# Klucz = to co zapisujemy w bazie JSON
+SENSOR_TYPES = {
+    "temperatura": {
+        "label": "Temperatura",
         "unit": "°C",
-        "icon": "mdi:thermometer"
+        "icon": "mdi:thermometer",
+        "device_class": "temperature"
     },
-    "Wilgotnosc": {
-        "entity_id": "sensor.light_sensor_wilgotnosc",
+    "wilgotnosc": {
+        "label": "Wilgotność",
         "unit": "%",
-        "icon": "mdi:water-percent"
+        "icon": "mdi:water-percent",
+        "device_class": "humidity"
     },
-    "Cisnienie": {
-        "entity_id": "sensor.light_sensor_cisnienie",
+    "cisnienie": {
+        "label": "Ciśnienie",
         "unit": "hPa",
-        "icon": "mdi:gauge"
+        "icon": "mdi:gauge",
+        "device_class": "pressure"
     },
+    "pm25": {
+        "label": "Jakość Powietrza (PM2.5)",
+        "unit": "μg/m³",
+        "icon": "mdi:blur",
+        "device_class": "pm25"
+    },
+    "bateria": {
+        "label": "Bateria",
+        "unit": "%",
+        "icon": "mdi:battery",
+        "device_class": "battery"
+    },
+    "moc": {
+        "label": "Moc",
+        "unit": "W",
+        "icon": "mdi:lightning-bolt",
+        "device_class": "power"
+    },
+    "napiecie": {
+        "label": "Napięcie",
+        "unit": "V",
+        "icon": "mdi:sine-wave",
+        "device_class": "voltage"
+    }
 }
+
+# Stara mapa dla kompatybilności (opcjonalnie, jeśli gdzieś jeszcze używasz SENSOR_MAP)
+SENSOR_MAP = SENSOR_TYPES
