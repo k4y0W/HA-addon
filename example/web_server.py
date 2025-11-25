@@ -88,7 +88,7 @@ HTML_PAGE = """
 
     // 2. Pobieranie i wyświetlanie listy
     async function loadTable() {
-        const res = await fetch('/api/employees');
+        const res = await fetch('api/employees');
         const employees = await res.json();
         const tbody = document.getElementById('empTable');
         tbody.innerHTML = '';
@@ -121,7 +121,7 @@ HTML_PAGE = """
             return;
         }
 
-        await fetch('/api/employees', {
+        await fetch('api/employees', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({name: name, sensors: selectedSensors})
@@ -135,7 +135,7 @@ HTML_PAGE = """
     // 4. Usuwanie
     window.deleteEmp = async (index) => {
         if(confirm("Na pewno usunąć?")) {
-            await fetch('/api/employees/' + index, { method: 'DELETE' });
+            await fetch('api/employees/' + index, { method: 'DELETE' });
             loadTable();
         }
     }
