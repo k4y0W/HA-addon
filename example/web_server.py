@@ -213,8 +213,15 @@ HTML_PAGE = """
     function copyLink() {
         const copyText = document.getElementById("linkInput");
         copyText.select();
-        navigator.clipboard.writeText(copyText.value);
-        alert("Skopiowano do schowka: " + copyText.value);
+        copyText.setSelectionRange(0, 99999); // Dla urządzeń mobilnych
+        
+        try {
+            // Stara, ale niezawodna metoda dla iframe'ów
+            document.execCommand('copy');
+            alert("Skopiowano do schowka: " + copyText.value);
+        } catch (err) {
+            alert("Nie udało się skopiować automatycznie. Zaznacz tekst i wciśnij CTRL+C.");
+        }
     }
 
     function updateCount() { 

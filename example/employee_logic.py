@@ -4,9 +4,6 @@ import requests
 import json
 import sys
 
-# Usunięto import employee_map, bo już go nie potrzebujemy w logice backendowej
-# SENSOR_TYPES było potrzebne tylko do UI
-
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 API_URL = "http://supervisor/core/api"
 HEADERS = {

@@ -38,12 +38,24 @@ const SHARED_STYLES = `
   .time-val { font-size: 1.3rem; font-weight: 800; color: var(--primary-text-color); }
   .time-unit { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; }
 
-  .sensors-row { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; border-top: 1px solid var(--divider-color, #eee); }
   .sensor-chip { 
-    display: inline-flex; align-items: center; background: var(--secondary-background-color, #f5f5f5); 
-    padding: 4px 10px; border-radius: 8px; font-size: 0.85rem; color: var(--primary-text-color); border: 1px solid var(--divider-color, #eee);
-  }
-  .sensor-chip ha-icon { --mdc-icon-size: 16px; margin-right: 6px; opacity: 0.7; }
+  display: inline-flex; 
+  align-items: center; 
+  background: #ffffff; /* Białe tło */
+  color: #333;         /* Ciemny tekst */
+  padding: 6px 12px; 
+  border-radius: 20px; /* Bardziej zaokrąglone */
+  font-size: 0.85rem; 
+  font-weight: 500;
+  border: 1px solid #e0e0e0; /* Delikatna ramka */
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* Lekki cień */
+  margin-top: 4px;
+}
+.sensor-chip ha-icon { 
+  --mdc-icon-size: 18px; 
+  margin-right: 6px; 
+  color: #5f6368; /* Szara ikona */
+}
 `;
 
 // --- HELPER: Generowanie HTML dla jednego pracownika ---
