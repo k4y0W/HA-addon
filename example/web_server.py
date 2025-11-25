@@ -6,7 +6,16 @@ from flask import Flask, request, jsonify, render_template_string
 from employee_map import SENSOR_TYPES
 
 DATA_FILE = "/data/employees.json"
+OPTIONS_FILE = "/data/options.json"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+USER_TOKEN = ""
+
+try:
+    with open(OPTIONS_FILE, 'r') as f:
+        opts = json.load(f)
+        USER_TOKEN = opts.get("ha_token", "")
+except: pass
+
 API_URL = "http://supervisor/core/api"
 HEADERS = {
     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
@@ -15,7 +24,6 @@ HEADERS = {
 
 app = Flask(__name__)
 
-# --- SŁOWNIK TŁUMACZEŃ DO CZYSTYCH NAZW ---
 PRETTY_NAMES = {
     "temperature": "Temperatura",
     "humidity": "Wilgotność",
@@ -30,15 +38,12 @@ PRETTY_NAMES = {
     "illuminance": "Jasność"
 }
 
-# --- 🚫 CZARNA LISTA (Filtrowanie śmieci) ---
 BLOCKED_PREFIXES = [
     "sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", 
     "sensor.zone", "sensor.automation", "sensor.script", 
     "update.", "person.", "zone.", "sun."
 ]
-BLOCKED_DEVICE_CLASSES = [
-    "timestamp", "enum", "update", "date"
-]
+BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
 
 def load_employees():
     if not os.path.exists(DATA_FILE): return []
@@ -49,46 +54,33 @@ def load_employees():
 def save_employees(data):
     with open(DATA_FILE, 'w') as f: json.dump(data, f, indent=4)
 
-# --- LOGIKA FILTROWANIA I NAZEWNICTWA ---
 def get_clean_sensors():
     sensors = []
     try:
         resp = requests.get(f"{API_URL}/states", headers=HEADERS)
         if resp.status_code == 200:
             all_states = resp.json()
-            
             for entity in all_states:
                 eid = entity['entity_id']
                 attrs = entity.get("attributes", {})
                 friendly_name = attrs.get("friendly_name", eid)
                 device_class = attrs.get("device_class")
                 
-                # 1. FILTROWANIE PO TYPIE (Tylko sensory i binary)
-                if not (eid.startswith("sensor.") or eid.startswith("binary_sensor.") or eid.startswith("switch.") or eid.startswith("light.")):
-                    continue
-                
-                # 2. FILTROWANIE NASZYCH WŁASNYCH SENSORÓW (Pętla)
-                if eid.endswith("_status") or eid.endswith("_czas_pracy") or "_wybrany_pomiar" in eid:
-                    continue
-                
-                # 3. FILTROWANIE ŚMIECI SYSTEMOWYCH (Backup, Sun, etc.)
-                if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES):
-                    continue
-                if device_class in BLOCKED_DEVICE_CLASSES:
-                    continue
-                if "scene_history" in eid or "message" in eid: # Xiaomi śmieci
-                    continue
+                if not (eid.startswith("sensor.") or eid.startswith("binary_sensor.") or eid.startswith("switch.") or eid.startswith("light.")): continue
+                if eid.endswith("_status") or eid.endswith("_czas_pracy") or "_wybrany_pomiar" in eid: continue
+                if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES): continue
+                if device_class in BLOCKED_DEVICE_CLASSES: continue
+                if "scene_history" in eid or "message" in eid: continue
 
-                # 4. ŁADNE NAZWY (CLEANING)
                 unit = attrs.get("unit_of_measurement", "")
-                
                 main_label = friendly_name 
                 
-                if device_class in PRETTY_NAMES:
-                    main_label = PRETTY_NAMES[device_class]
+                if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
                 elif unit == "kWh": main_label = "Energia"
+                elif unit == "hPa": main_label = "Ciśnienie"
+                elif unit == "%": main_label = "Wilgotność"
                 
                 sensors.append({
                     "id": eid,
@@ -98,9 +90,7 @@ def get_clean_sensors():
                     "state": entity.get("state", "-"),
                     "device_class": device_class
                 })
-                
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
-            
     except: pass
     return sensors
 
@@ -114,26 +104,29 @@ def get_ha_state(entity_id):
     except: pass
     return "-"
 
-# --- FUNKCJA AUTO-INSTALACJI KARTY ---
 def register_lovelace_resource():
     CARD_URL = "/local/employee-card.js"
+    token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
+    install_headers = {
+        "Authorization": f"Bearer {token_to_use}",
+        "Content-Type": "application/json",
+    }
     try:
-        get_resp = requests.get(f"{API_URL}/lovelace/resources", headers=HEADERS)
-        if get_resp.status_code != 200: return False, f"Błąd API (Sprawdź tryb Lovelace): {get_resp.status_code}"
+        get_resp = requests.get(f"{API_URL}/lovelace/resources", headers=install_headers)
+        if get_resp.status_code in [401, 403, 404]:
+            return False, "Brak uprawnień! Podaj 'Token Długoterminowy' w konfiguracji."
         
         resources = get_resp.json()
         for res in resources:
             if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
 
         payload = {"url": CARD_URL, "type": "module"}
-        post_resp = requests.post(f"{API_URL}/lovelace/resources", headers=HEADERS, json=payload)
+        post_resp = requests.post(f"{API_URL}/lovelace/resources", headers=install_headers, json=payload)
         
         if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
-        else: return False, f"Błąd: {post_resp.text}"
-            
+        else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
-# --- HTML ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -183,27 +176,21 @@ HTML_PAGE = """
                                     <label class="form-label fw-bold">Imię i Nazwisko</label>
                                     <input type="text" class="form-control" id="empName" required placeholder="np. Jan Kowalski">
                                 </div>
-                                
                                 <div class="mb-3">
                                     <label class="form-label fw-bold d-flex justify-content-between">
                                         <span>Przypisz Czujniki</span>
                                         <span class="badge bg-light text-dark fw-normal border" id="count-badge">0 wybranych</span>
                                     </label>
-                                    <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch" placeholder="🔍 Filtruj (np. 'temp', 'biuro')...">
-                                    
+                                    <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch" placeholder="🔍 Filtruj...">
                                     <div class="sensor-list-container border rounded p-2 bg-light" style="max-height: 400px; overflow-y: auto;">
-                                        <div id="sensorList" class="d-flex flex-column gap-2">
-                                            <div class="text-center text-muted p-3">Ładowanie...</div>
-                                        </div>
+                                        <div id="sensorList" class="d-flex flex-column gap-2"><div class="text-center text-muted p-3">Ładowanie...</div></div>
                                     </div>
                                 </div>
-
                                 <button type="submit" class="btn btn-primary w-100">Zapisz Pracownika</button>
                             </form>
                         </div>
                     </div>
                 </div>
-
                 <div class="col-lg-5">
                     <div class="card shadow-sm">
                         <div class="card-header bg-white fw-bold">Lista Pracowników</div>
@@ -223,21 +210,20 @@ HTML_PAGE = """
     const chkContainer = document.getElementById('sensorList');
     const countBadge = document.getElementById('count-badge');
 
-    function updateCount() { countBadge.innerText = document.querySelectorAll('#sensorList input:checked').length + " wybranych"; }
+    function updateCount() { 
+        const count = document.querySelectorAll('#sensorList input:checked').length;
+        countBadge.innerText = count + " wybranych";
+    }
 
     async function installCard() {
         const btn = document.getElementById('tab-install');
         const originalText = btn.innerHTML;
         btn.innerHTML = '⏳ Próbuję...';
-        
         try {
             const res = await fetch('api/install_card', { method: 'POST' });
             const data = await res.json();
             if(data.success) alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
-            else {
-                // Fallback - instrukcja dla usera
-                prompt("Automatyczna instalacja nie zadziałała (blokada API).\\nSkopiuj ten link i dodaj go ręcznie w Ustawienia -> Pulpity -> Zasoby:", "/local/employee-card.js");
-            }
+            else prompt("Automatyczna instalacja nie zadziałała.\\nSkopiuj ten link i dodaj go ręcznie w Ustawienia -> Pulpity -> Zasoby:", "/local/employee-card.js");
         } catch (e) { alert("Błąd połączenia."); }
         btn.innerHTML = originalText;
     }
@@ -252,7 +238,6 @@ HTML_PAGE = """
 
             const div = document.createElement('div');
             div.className = 'sensor-tile rounded p-2 d-flex align-items-center';
-            
             let icon = "mdi-eye-circle-outline";
             if (s.main_label === "Temperatura") icon = "mdi-thermometer";
             else if (s.main_label === "Wilgotność") icon = "mdi-water-percent";
@@ -339,7 +324,6 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
-# API ENDPOINTS (Bez zmian)
 @app.route('/api/employees', methods=['GET'])
 def api_get(): return jsonify(load_employees())
 
