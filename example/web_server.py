@@ -3,7 +3,6 @@ import os
 import logging
 import requests
 from flask import Flask, request, jsonify, render_template_string
-from employee_map import SENSOR_TYPES
 
 DATA_FILE = "/data/employees.json"
 OPTIONS_FILE = "/data/options.json"
@@ -38,17 +37,12 @@ PRETTY_NAMES = {
     "illuminance": "Jasność"
 }
 
-BLOCKED_PREFIXES = [
-    "sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", 
-    "sensor.zone", "sensor.automation", "sensor.script", 
-    "update.", "person.", "zone.", "sun."
-]
+BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun."]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
 
 def load_employees():
     if not os.path.exists(DATA_FILE): return []
-    try:
-        with open(DATA_FILE, 'r') as f: return json.load(f)
+    try: with open(DATA_FILE, 'r') as f: return json.load(f)
     except: return []
 
 def save_employees(data):
@@ -65,31 +59,20 @@ def get_clean_sensors():
                 attrs = entity.get("attributes", {})
                 friendly_name = attrs.get("friendly_name", eid)
                 device_class = attrs.get("device_class")
-                
                 if not (eid.startswith("sensor.") or eid.startswith("binary_sensor.") or eid.startswith("switch.") or eid.startswith("light.")): continue
                 if eid.endswith("_status") or eid.endswith("_czas_pracy") or "_wybrany_pomiar" in eid: continue
                 if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
                 if "scene_history" in eid or "message" in eid: continue
-
                 unit = attrs.get("unit_of_measurement", "")
                 main_label = friendly_name 
-                
                 if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
                 elif unit == "kWh": main_label = "Energia"
                 elif unit == "hPa": main_label = "Ciśnienie"
                 elif unit == "%": main_label = "Wilgotność"
-                
-                sensors.append({
-                    "id": eid,
-                    "main_label": main_label,
-                    "sub_label": friendly_name,
-                    "unit": unit,
-                    "state": entity.get("state", "-"),
-                    "device_class": device_class
-                })
+                sensors.append({"id": eid, "main_label": main_label, "sub_label": friendly_name, "unit": unit, "state": entity.get("state", "-"), "device_class": device_class})
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
     except: pass
     return sensors
@@ -107,25 +90,31 @@ def get_ha_state(entity_id):
 def register_lovelace_resource():
     CARD_URL = "/local/employee-card.js"
     token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
-    install_headers = {
-        "Authorization": f"Bearer {token_to_use}",
-        "Content-Type": "application/json",
-    }
+    install_headers = {"Authorization": f"Bearer {token_to_use}", "Content-Type": "application/json"}
     try:
-        get_resp = requests.get(f"{API_URL}/lovelace/resources", headers=install_headers)
-        if get_resp.status_code in [401, 403, 404]:
-            return False, "Brak uprawnień! Podaj 'Token Długoterminowy' w konfiguracji."
+        # Próba 1: Przez Supervisor Proxy
+        url = f"{API_URL}/lovelace/resources"
+        
+        # Próba 2: Jeśli user podał token, spróbujmy bezpośrednio do localhost (ominięcie proxy Supervisora)
+        if USER_TOKEN:
+            # Często HA w kontenerach jest dostępny pod tym adresem
+            # url = "http://homeassistant:8123/api/lovelace/resources" 
+            pass 
+
+        get_resp = requests.get(url, headers=install_headers)
+        if get_resp.status_code in [401, 403, 404]: return False, "Brak uprawnień API."
         
         resources = get_resp.json()
         for res in resources:
             if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
 
         payload = {"url": CARD_URL, "type": "module"}
-        post_resp = requests.post(f"{API_URL}/lovelace/resources", headers=install_headers, json=payload)
+        post_resp = requests.post(url, headers=install_headers, json=payload)
         
         if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
         else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
+
 
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -156,15 +145,12 @@ HTML_PAGE = """
         <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
             <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
             <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
-            <li class="nav-item"><button class="nav-link text-success" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj w HA</button></li>
+            <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Zainstaluj Kartę</button></li>
         </ul>
     </div>
 
     <div class="tab-content">
-        <div class="tab-pane fade show active" id="pills-monitor">
-            <div class="row g-3" id="dashboard-grid"></div>
-        </div>
-
+        <div class="tab-pane fade show active" id="pills-monitor"><div class="row g-3" id="dashboard-grid"></div></div>
         <div class="tab-pane fade" id="pills-config">
             <div class="row">
                 <div class="col-lg-7">
@@ -204,11 +190,34 @@ HTML_PAGE = """
     </div>
 </div>
 
+<div class="modal fade" id="installModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-light">
+        <h5 class="modal-title">Konfiguracja Karty</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body text-center">
+        <div class="mb-3">
+             <i class="mdi mdi-clipboard-check text-success" style="font-size: 4rem;"></i>
+             <h5>Link skopiowany do schowka!</h5>
+        </div>
+        <p class="text-muted">Automatyczna instalacja została zablokowana przez HA.<br>Ale spokojnie, link masz już w schowku:</p>
+        <div class="alert alert-secondary p-2 user-select-all" id="link-box">/local/employee-card.js</div>
+        <hr>
+        <p class="mb-2">Teraz kliknij przycisk poniżej, aby otworzyć ustawienia Zasobów i wklej link (CTRL+V).</p>
+        <a href="/config/lovelace/resources" target="_blank" class="btn btn-primary w-100"><i class="mdi mdi-open-in-new"></i> Otwórz Ustawienia Zasobów</a>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     const ALL_SENSORS = {{ all_sensors | tojson }};
     const chkContainer = document.getElementById('sensorList');
     const countBadge = document.getElementById('count-badge');
+    const installModal = new bootstrap.Modal(document.getElementById('installModal'));
 
     function updateCount() { 
         const count = document.querySelectorAll('#sensorList input:checked').length;
@@ -218,24 +227,32 @@ HTML_PAGE = """
     async function installCard() {
         const btn = document.getElementById('tab-install');
         const originalText = btn.innerHTML;
-        btn.innerHTML = '⏳ Próbuję...';
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Instaluję...';
+        
         try {
             const res = await fetch('api/install_card', { method: 'POST' });
             const data = await res.json();
-            if(data.success) alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
-            else prompt("Automatyczna instalacja nie zadziałała.\\nSkopiuj ten link i dodaj go ręcznie w Ustawienia -> Pulpity -> Zasoby:", "/local/employee-card.js");
-        } catch (e) { alert("Błąd połączenia."); }
+            if(data.success) {
+                alert("SUKCES! " + data.message + "\\n\\nOdśwież stronę (Ctrl+F5)!");
+            } else {
+                // FALLBACK: Kopiuj do schowka i pokaż ładne okno
+                navigator.clipboard.writeText("/local/employee-card.js");
+                installModal.show();
+            }
+        } catch (e) { 
+            // Błąd sieci też traktujemy jak brak uprawnień
+            navigator.clipboard.writeText("/local/employee-card.js");
+            installModal.show();
+        }
         btn.innerHTML = originalText;
     }
 
     function renderSensorList(filterText = "") {
         chkContainer.innerHTML = "";
         if (!ALL_SENSORS || ALL_SENSORS.length === 0) { chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów.</div>'; return; }
-
         ALL_SENSORS.forEach(s => {
             const searchStr = (s.name + s.id + s.main_label).toLowerCase();
             if (filterText && !searchStr.includes(filterText.toLowerCase())) return;
-
             const div = document.createElement('div');
             div.className = 'sensor-tile rounded p-2 d-flex align-items-center';
             let icon = "mdi-eye-circle-outline";
@@ -244,18 +261,11 @@ HTML_PAGE = """
             else if (s.main_label === "Ciśnienie") icon = "mdi-gauge";
             else if (s.main_label === "Moc") icon = "mdi-lightning-bolt";
             else if (s.main_label === "Bateria") icon = "mdi-battery";
-
             div.innerHTML = `
-                <div class="me-3 d-flex align-items-center justify-content-center bg-light rounded-circle" style="width:36px; height:36px;">
-                    <i class="mdi ${icon} fs-5 text-secondary"></i>
-                </div>
-                <div style="flex: 1; min-width: 0;">
-                    <div class="tile-header text-truncate">${s.main_label}</div>
-                    <div class="tile-sub text-truncate" title="${s.sub_label}">${s.sub_label}</div>
-                </div>
+                <div class="me-3 d-flex align-items-center justify-content-center bg-light rounded-circle" style="width:36px; height:36px;"><i class="mdi ${icon} fs-5 text-secondary"></i></div>
+                <div style="flex: 1; min-width: 0;"><div class="tile-header text-truncate">${s.main_label}</div><div class="tile-sub text-truncate" title="${s.sub_label}">${s.sub_label}</div></div>
                 <div class="tile-val">${s.state} <span style="font-size:0.7em">${s.unit}</span></div>
-                <input class="form-check-input d-none" type="checkbox" value="${s.id}" id="chk_${s.id}">
-            `;
+                <input class="form-check-input d-none" type="checkbox" value="${s.id}" id="chk_${s.id}">`;
             div.addEventListener('click', (e) => {
                 const chk = div.querySelector('input');
                 chk.checked = !chk.checked;
@@ -265,9 +275,7 @@ HTML_PAGE = """
             chkContainer.appendChild(div);
         });
     }
-
     document.getElementById('sensorSearch').addEventListener('input', (e) => renderSensorList(e.target.value));
-
     async function refreshMonitor() {
         if (!document.getElementById('tab-monitor').classList.contains('active')) return;
         try {
@@ -276,23 +284,14 @@ HTML_PAGE = """
             const grid = document.getElementById('dashboard-grid');
             if(data.length === 0) { grid.innerHTML = '<p class="text-center mt-5">Brak danych.</p>'; return; }
             grid.innerHTML = data.map(emp => `
-                <div class="col-md-6 col-xl-4">
-                    <div class="card h-100">
-                        <div class="card-body">
-                            <div class="d-flex align-items-center mb-3">
-                                <div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
-                                <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small></div>
-                                <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div>
-                            </div>
-                            <div class="row g-2">${emp.measurements.map(m => 
-                                `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`
-                            ).join('')}</div>
-                        </div>
-                    </div>
-                </div>`).join('');
+                <div class="col-md-6 col-xl-4"><div class="card h-100"><div class="card-body">
+                    <div class="d-flex align-items-center mb-3"><div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
+                    <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small></div>
+                    <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div></div>
+                    <div class="row g-2">${emp.measurements.map(m => `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`).join('')}</div>
+                </div></div></div>`).join('');
         } catch(e){}
     }
-
     async function loadConfig() {
         const res = await fetch('api/employees');
         const data = await res.json();
@@ -300,7 +299,6 @@ HTML_PAGE = """
             <tr><td><strong>${emp.name}</strong></td><td><span class="badge bg-secondary">${emp.sensors ? emp.sensors.length : 0}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
         `).join('');
     }
-
     document.getElementById('addForm').onsubmit = async (e) => {
         e.preventDefault();
         const name = document.getElementById('empName').value;
@@ -311,9 +309,7 @@ HTML_PAGE = """
         document.getElementById('empName').value = '';
         renderSensorList(); loadConfig(); refreshMonitor(); alert('Zapisano!');
     };
-
     window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitor(); } }
-
     renderSensorList(); loadConfig(); refreshMonitor(); setInterval(refreshMonitor, 3000);
 </script>
 </body>
@@ -361,14 +357,12 @@ def api_monitor():
                 friendly_name = attrs.get('friendly_name', entity_id)
                 dc = attrs.get('device_class')
                 unit = attrs.get('unit_of_measurement', '')
-                
                 label = friendly_name
                 if dc in PRETTY_NAMES: label = PRETTY_NAMES[dc]
                 elif unit == "W": label = "Moc"
                 elif unit == "V": label = "Napięcie"
                 elif unit == "hPa": label = "Ciśnienie"
                 elif unit == "%": label = "Wilgotność"
-
                 meas.append({"label": label, "value": val, "unit": unit})
             except: pass
         res.append({"name": emp['name'], "status": status, "work_time": time, "measurements": meas})
