@@ -92,7 +92,7 @@ def main():
                     elif unit == "V": suffix = "napiecie"; icon="mdi:sine-wave"
                     elif unit == "A": suffix = "natezenie"; icon="mdi:current-ac"
                     elif unit == "µg/m³": suffix = "pm25"; icon="mdi:blur"
-                    elif unit == "µg/m³": suffix = "pm25_density"; icon="mdi:blur"
+                    elif unit == "µg/m³": { suffix: 'pm25_density', icon: 'mdi:blur', unit: 'μg/m³' }, { suffix: 'pm25', icon: 'mdi:blur', unit: 'μg/m³' }
                     
                     set_state(f"sensor.{safe}_{suffix}", val, f"{name} - {friendly}", icon, unit)
 
