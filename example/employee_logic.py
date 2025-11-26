@@ -6,15 +6,37 @@ import sys
 from datetime import datetime
 
 # --- KONFIGURACJA ---
+# Domyślne wartości (Supervisor)
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
-API_URL = "http://supervisor/core/api"
-HEADERS = {
-    "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
-    "Content-Type": "application/json"
-}
+# Domyślny adres proxy
+API_URL = "http://supervisor/core/api" 
+TOKEN = SUPERVISOR_TOKEN
 
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
+OPTIONS_FILE = "/data/options.json"
+
+# --- PRÓBA WCZYTANIA TOKENA ADMINISTRATORA (User Token) ---
+# To pozwala ominąć błąd 405 Method Not Allowed
+try:
+    if os.path.exists(OPTIONS_FILE):
+        with open(OPTIONS_FILE, 'r') as f:
+            opts = json.load(f)
+            user_token = opts.get("ha_token", "").strip()
+            if user_token:
+                print(">>> UŻYWAM TOKENA UŻYTKOWNIKA (Tryb Administratora) <<<", flush=True)
+                TOKEN = user_token
+                # Łączymy się bezpośrednio do core, omijając proxy Supervisora
+                API_URL = "http://homeassistant:8123/api"
+            else:
+                print(">>> UŻYWAM TOKENA SUPERVISORA (Tryb Ograniczony) <<<", flush=True)
+except Exception as e:
+    print(f"Błąd wczytywania opcji: {e}", flush=True)
+
+HEADERS = {
+    "Authorization": f"Bearer {TOKEN}",
+    "Content-Type": "application/json"
+}
 
 # --- MAPOWANIE JEDNOSTEK ---
 UNIT_MAP = {
@@ -28,24 +50,12 @@ UNIT_MAP = {
     "µg/m³": {"suffix": "pm25", "icon": "mdi:blur"},
 }
 
-# Lista końcówek, które są WŁASNOŚCIĄ tego dodatku.
-# Jeśli skrypt znajdzie w HA coś z tą końcówką, a nie ma tego w JSON -> KASUJE.
 MANAGED_SUFFIXES = [
-    "_status", 
-    "_czas_pracy", 
-    "_moc", 
-    "_napiecie", 
-    "_natezenie", 
-    "_temperatura", 
-    "_wilgotnosc", 
-    "_cisnienie", 
-    "_bateria", 
-    "_pm25",
-    "_jasnosc"
+    "_status", "_czas_pracy", "_moc", "_napiecie", "_natezenie", 
+    "_temperatura", "_wilgotnosc", "_cisnienie", "_bateria", "_pm25", "_jasnosc"
 ]
 
 def log(msg):
-    """Pomocnicza funkcja do logowania z datą"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 def get_data():
@@ -84,21 +94,20 @@ def set_state(entity_id, state, friendly, icon, group, unit=None):
         log(f"Błąd ustawiania {entity_id}: {e}")
 
 def delete_entity_force(entity_id):
-    """Agresywne usuwanie encji z logowaniem wyniku"""
     try:
         log(f"-> PRÓBA USUNIĘCIA: {entity_id}")
         r = requests.delete(f"{API_URL}/states/{entity_id}", headers=HEADERS)
         
         if r.status_code in [200, 201, 204]:
-            log(f"   SUKCES! Usunięto {entity_id} (Kod: {r.status_code})")
+            log(f"   SUKCES! Usunięto {entity_id}")
         else:
-            log(f"   BŁĄD API! Nie udało się usunąć {entity_id}. Kod: {r.status_code}, Treść: {r.text}")
+            log(f"   BŁĄD API! Kod: {r.status_code}, Treść: {r.text}")
             
     except Exception as e:
-        log(f"   WYJĄTEK podczas usuwania {entity_id}: {e}")
+        log(f"   WYJĄTEK: {e}")
 
 def main():
-    log("=== START SYSTEMU EMPLOYEE MANAGER (v.FINAL) ===")
+    log(f"=== START SYSTEMU (API: {API_URL}) ===")
     memory = load_status()
     today_str = datetime.now().strftime("%Y-%m-%d")
     
@@ -108,28 +117,21 @@ def main():
 
     while True:
         try:
-            # 1. Wczytaj konfigurację (Kogo mamy obsługiwać?)
             emps = get_data()
-            
-            # 2. Zbuduj listę WSZYSTKICH sensorów, które MAJĄ PRAWO ISTNIEĆ
-            #    (tzw. Biała Lista / Whitelist)
             allowed_ids = set()
 
+            # 1. Budowanie Białej Listy
             for emp in emps:
-                # .strip() usuwa spacje z początku i końca!
                 name_clean = emp['name'].strip()
                 safe = name_clean.lower().replace(" ", "_")
                 group = emp.get('group', 'Domyślna')
 
-                # Główne sensory
                 allowed_ids.add(f"sensor.{safe}_status")
                 allowed_ids.add(f"sensor.{safe}_czas_pracy")
 
-                # Sensory pochodne (z czujników)
                 for eid in emp.get('sensors', []):
                     data = get_state_full(eid)
                     if not data: continue
-                    
                     attrs = data.get('attributes', {})
                     unit = attrs.get('unit_of_measurement')
                     dev_class = attrs.get('device_class')
@@ -145,21 +147,15 @@ def main():
                     if suffix_info:
                         allowed_ids.add(f"sensor.{safe}_{suffix_info['suffix']}")
 
-            # 3. SKANOWANIE I CZYSZCZENIE (PURGE)
-            #    Pobieramy wszystko z HA i kasujemy to, czego nie ma na allowed_ids
+            # 2. Czyszczenie duchów
             try:
                 r = requests.get(f"{API_URL}/states", headers=HEADERS)
                 if r.status_code == 200:
                     all_states = r.json()
-                    
                     for entity in all_states:
                         eid = entity['entity_id']
-                        
-                        # Sprawdzamy tylko sensory
                         if not eid.startswith("sensor."): continue
 
-                        # Sprawdzamy czy sensor kończy się na jedną z naszych końcówek
-                        # (czyli czy wygląda na sensor stworzony przez ten dodatek)
                         is_managed = False
                         for suffix in MANAGED_SUFFIXES:
                             if eid.endswith(suffix):
@@ -167,15 +163,12 @@ def main():
                                 break
                         
                         if is_managed:
-                            # KLUCZOWY MOMENT:
-                            # Jeśli sensor wygląda jak nasz, ale nie ma go na liście dozwolonych -> KASUJ
                             if eid not in allowed_ids:
                                 delete_entity_force(eid)
-                                
             except Exception as e:
-                log(f"Błąd podczas skanowania/usuwania: {e}")
+                log(f"Błąd skanowania: {e}")
 
-            # 4. AKTUALIZACJA STANÓW (Tylko dla legalnych pracowników)
+            # 3. Aktualizacja stanów
             current_date_str = datetime.now().strftime("%Y-%m-%d")
             if current_date_str != memory["date"]:
                 memory["date"] = current_date_str
@@ -191,13 +184,11 @@ def main():
                 if name not in work_counters: work_counters[name] = 0.0
                 is_working = False
                 
-                # Sprawdzanie pracy...
                 for eid in emp.get('sensors', []):
                     data = get_state_full(eid)
                     if not data: continue
                     state_val = data['state']
                     if state_val in ['unavailable', 'unknown', 'None']: continue
-                    
                     attrs = data.get('attributes', {})
                     unit = attrs.get('unit_of_measurement')
                     dev_class = attrs.get('device_class')
@@ -209,7 +200,6 @@ def main():
                             if val > 20.0: is_working = True
                         except: pass
                     
-                    # Aktualizacja sensorów pomocniczych
                     suffix_info = None
                     if unit in UNIT_MAP:
                         suffix_info = UNIT_MAP[unit]
@@ -239,7 +229,7 @@ def main():
             save_status(memory)
             
         except Exception as e:
-            log(f"Krytyczny błąd w pętli głównej: {e}")
+            log(f"Krytyczny błąd: {e}")
 
         time.sleep(10)
 
