@@ -11,14 +11,17 @@ DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 
 def get_data():
-    try: with open(DATA_FILE, 'r') as f: return json.load(f)
-    except: return []
+    try: with open(DATA_FILE, 'r') as f:
+        return json.load(f)
+    except: 
+        return []
 
 def get_state_full(entity_id):
     try:
         r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
         return r.json() if r.status_code == 200 else None
-    except: return None
+    except: 
+        return None
 
 # Funkcja wysyłająca stan wraz z grupą
 def set_state(entity_id, state, friendly, icon, group, unit=None):
@@ -28,7 +31,11 @@ def set_state(entity_id, state, friendly, icon, group, unit=None):
 
 def main():
     print("Startuję logikę z grupami...", flush=True)
-    # ... (Tutaj wstaw logikę wczytywania liczników z pliku status.json jak wcześniej) ...
+    memory = load_status()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if memory.get("date") != today_str:
+        memory = {"date": today_str, "counters": {}}
+    work_counters = memory.get("counters", {})
     work_counters = {} 
 
     while True:
