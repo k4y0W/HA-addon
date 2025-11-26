@@ -1,3 +1,4 @@
+```mermaid
 graph TD
     %% Style definitions
     classDef physical fill:#e1f5fe,stroke:#01579b,color:#01579b;
@@ -6,11 +7,9 @@ graph TD
     classDef user fill:#f3e5f5,stroke:#4a148c,color:#4a148c;
 
     subgraph HA_CORE [Home Assistant Core / Rejestr Encji]
-        %% Fizyczne urządzenia
         Entity_Source1[("🔌 Encja Źródłowa 1\n(np. sensor.gniazdko_moc)")]:::physical
         Entity_Source2[("🏃 Encja Źródłowa 2\n(np. binary_sensor.ruch)")]:::physical
         
-        %% Wirtualne rezultaty
         Entity_Virtual_Status(["👤 Wirtualny Sensor: STATUS\n(np. sensor.monika_status)"]) :::virtual
         Entity_Virtual_Time(["⏱️ Wirtualny Sensor: CZAS\n(np. sensor.monika_czas_pracy)"]) :::virtual
         Entity_Virtual_Clone(["👁️ Wirtualny Sensor: KLON\n(np. sensor.monika_moc)"]) :::virtual
@@ -32,11 +31,4 @@ graph TD
     Logic_Engine -- "Tworzy / Aktualizuje\n(Stan: Pracuje)" --> Entity_Virtual_Status
     Logic_Engine -- "Tworzy / Aktualizuje\n(Stan: 125 min)" --> Entity_Virtual_Time
     Logic_Engine -- "Kopiuje wartość 1:1\n(Stan: 160W)" --> Entity_Virtual_Clone
-
-    %% Legenda (opcjonalnie, jeśli system to wspiera)
-    %% subgraph Legenda
-    %%     L1[Fizyczna Encja HA]:::physical
-    %%     L2[Logika Add-onu]:::addon
-    %%     L3[Wygenerowana Encja Wirtualna]:::virtual
-    %%     L4[Definicja Obiektu 'Pracownik']:::user
-    %% end
+```
