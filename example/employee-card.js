@@ -1,3 +1,4 @@
+// --- KONFIGURACJA SENSORÓW ---
 const KNOWN_SENSOR_TYPES = [
   { suffix: 'temperatura', icon: 'mdi:thermometer', unit: '°C' },
   { suffix: 'wilgotnosc', icon: 'mdi:water-percent', unit: '%' },
@@ -10,6 +11,7 @@ const KNOWN_SENSOR_TYPES = [
   { suffix: 'pm25_density', icon: 'mdi:blur', unit: 'μg/m³' }
 ];
 
+// --- STYLE CSS ---
 const SHARED_STYLES = `
   .emp-card { 
     background: var(--ha-card-background, white); 
@@ -40,39 +42,39 @@ const SHARED_STYLES = `
   .info { flex: 1; }
   .emp-name { font-weight: 800; font-size: 1.3rem; color: var(--primary-text-color); line-height: 1.2; }
   .emp-status { font-size: 1rem; color: var(--secondary-text-color); font-weight: 600; margin-top: 2px; }
-  
+  .emp-group { font-size: 0.75rem; color: var(--secondary-text-color); background: var(--secondary-background-color); padding: 2px 8px; border-radius: 4px; display: inline-block; margin-top: 4px; border: 1px solid var(--divider-color); }
+
   .stats { text-align: right; min-width: 80px; }
   .time-val { font-size: 1.6rem; font-weight: 900; color: var(--primary-text-color); }
   .time-unit { font-size: 0.75rem; color: var(--secondary-text-color); font-weight: 700; text-transform: uppercase; }
 
-  /* Pasek Postępu (Wykres) */
-  .progress-container {
-    width: 100%;
-    height: 6px;
-    background-color: #f0f0f0;
-    border-radius: 3px;
-    margin-bottom: 12px;
-    overflow: hidden;
-  }
-  .progress-bar {
-    height: 100%;
-    background-color: #4CAF50;
-    border-radius: 3px;
-    transition: width 0.5s ease-in-out;
-  }
+  .progress-container { width: 100%; height: 6px; background-color: #f0f0f0; border-radius: 3px; margin-bottom: 12px; overflow: hidden; }
+  .progress-bar { height: 100%; background-color: #4CAF50; border-radius: 3px; transition: width 0.5s ease-in-out; }
+  .progress-bar.over { background-color: #9C27B0; }
 
   .sensors-row { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 2px solid #f0f0f0; }
   .sensor-chip { 
     display: inline-flex; align-items: center; 
     background: var(--secondary-background-color); 
     padding: 6px 12px; border-radius: 20px; 
-    font-size: 0.9rem; 
-    font-weight: 600;
+    font-size: 0.9rem; font-weight: 600;
     color: var(--primary-text-color); 
     border: 1px solid var(--divider-color, #ddd);
     box-shadow: 0 1px 2px rgba(0,0,0,0.05);
   }
   .sensor-chip ha-icon { --mdc-icon-size: 18px; margin-right: 6px; color: var(--secondary-text-color); }
+
+  /* Style filtrów */
+  .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 10px; scrollbar-width: none; }
+  .filter-btn {
+    border: none; background: var(--card-background-color); 
+    box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,0.1));
+    padding: 8px 16px; border-radius: 20px; font-weight: 600; color: var(--primary-text-color);
+    cursor: pointer; white-space: nowrap; transition: all 0.2s;
+    border: 1px solid var(--divider-color, transparent);
+  }
+  .filter-btn:hover { background: var(--secondary-background-color); }
+  .filter-btn.active { background: var(--primary-color); color: white; }
 `;
 
 function renderEmployeeHTML(hass, entityId) {
@@ -80,104 +82,64 @@ function renderEmployeeHTML(hass, entityId) {
   if (!statusEntity) return '';
 
   const fullName = statusEntity.attributes.friendly_name.replace(' - Status', '');
+  const groupName = statusEntity.attributes.group || 'Domyślna';
   const baseId = entityId.replace('_status', '');
   const state = statusEntity.state;
+
+  let statusClass = 'is-absent', iconName = 'mdi:account-off';
+  if (state === 'Pracuje') { statusClass = 'is-working'; iconName = 'mdi:laptop'; }
+  else if (state.includes('Idle') || state.includes('Obecny')) { statusClass = 'is-idle'; iconName = 'mdi:coffee'; }
 
   const timeEntity = hass.states[`${baseId}_czas_pracy`];
   const timeVal = timeEntity ? Math.round(parseFloat(timeEntity.state)) : 0;
 
-  // --- LOGIKA 8 GODZIN ---
-  const isOvertime = timeVal > 480; // 8h * 60min
-
-  let statusClass = 'is-absent';
-  let iconName = 'mdi:account-off';
-
-  if (state === 'Pracuje') {
-    statusClass = 'is-working';
-    iconName = 'mdi:laptop';
-    if (isOvertime) { statusClass = 'is-overtime'; iconName = 'mdi:fire'; } // Efekt nadgodzin
-  }
-  else if (state === 'Obecny (Idle)') { statusClass = 'is-idle'; iconName = 'mdi:coffee'; }
-
-  // Pasek
+  // Pasek postępu (8h)
   let progressPct = (timeVal / 480) * 100;
   let progressClass = "";
   if (progressPct > 100) { progressPct = 100; progressClass = "over"; }
 
-  // ... (reszta renderowania sensorów bez zmian) ...
+  let sensorsHtml = '';
+  KNOWN_SENSOR_TYPES.forEach(type => {
+    const sId = `${baseId}_${type.suffix}`;
+    const sEnt = hass.states[sId];
+    if (sEnt && sEnt.state !== 'unavailable' && sEnt.state !== 'unknown') {
+      const unit = sEnt.attributes.unit_of_measurement || type.unit;
+      sensorsHtml += `<div class="sensor-chip"><ha-icon icon="${type.icon}"></ha-icon><span>${sEnt.state} ${unit}</span></div>`;
+    }
+  });
 
   return `
-    <div class="emp-card">
+    <div class="emp-card" data-group="${groupName}">
       <div class="header">
         <div class="icon-box ${statusClass}"><ha-icon icon="${iconName}"></ha-icon></div>
         <div class="info">
           <div class="emp-name">${fullName}</div>
-          <div class="emp-status">${isOvertime && state == 'Pracuje' ? 'NADGODZINY 🔥' : state}</div>
-          <div style="font-size:0.75em; color:#999">${statusEntity.attributes.group || ''}</div>
+          <div class="emp-status">${state}</div>
+          <div class="emp-group">${groupName}</div>
         </div>
-        <div class="stats"><div class="time-val">${timeVal}</div><div class="time-unit">MINUT</div></div>
+        <div class="stats">
+          <div class="time-val">${timeVal}</div>
+          <div class="time-unit">MINUT</div>
+        </div>
       </div>
-      <div class="progress-container"><div class="progress-bar ${progressClass}" style="width: ${progressPct}%"></div></div>
+      <div class="progress-container" title="Cel: 8h"><div class="progress-bar ${progressClass}" style="width: ${progressPct}%"></div></div>
       <div class="sensors-row">${sensorsHtml}</div>
-    </div>`;
+    </div>
+  `;
 }
 
-// --- KARTA DASHBOARD Z FILTREM GRUP ---
+// ============================================================
+// KARTA DASHBOARDU (AUTO Z FILTRAMI)
+// ============================================================
 class EmployeeDashboard extends HTMLElement {
   setConfig(config) {
     this.config = config;
-    this.title = config.title || (config.group ? `Zespół: ${config.group}` : "Wszyscy");
+    this.title = config.title || "Zespół";
+    this.currentFilter = 'Wszyscy'; // Domyślny filtr
   }
 
   set hass(hass) {
-    if (!this.content) {
-      this.innerHTML = `...style... <div class="dash-title">${this.title}</div><div id="d"></div>`;
-      this.content = this.querySelector('#d');
-    }
-
-    // Pobieramy wszystkich pracowników
-    let employees = Object.keys(hass.states)
-      .filter(eid => eid.startsWith('sensor.') && eid.endsWith('_status'));
-
-    // --- FILTROWANIE PO GRUPIE ---
-    if (this.config.group) {
-      employees = employees.filter(eid => {
-        const attr = hass.states[eid].attributes;
-        return attr && attr.group === this.config.group;
-      });
-    }
-
-    employees.sort();
-
-    if (employees.length === 0) {
-      this.content.innerHTML = "Brak pracowników w tej grupie."; return;
-    }
-    this.content.innerHTML = employees.map(eid => renderEmployeeHTML(hass, eid)).join('');
-  }
-}
-
-class EmployeeCard extends HTMLElement {
-  setConfig(config) {
-    if (!config.name) throw new Error('Podaj imię!');
-    this.config = config;
-  }
-  set hass(hass) {
-    const id = this.config.name.toLowerCase().trim().replace(/ /g, "_").replace(/ą/g, 'a').replace(/ć/g, 'c').replace(/ę/g, 'e').replace(/ł/g, 'l').replace(/ń/g, 'n').replace(/ó/g, 'o').replace(/ś/g, 's').replace(/ź/g, 'z').replace(/ż/g, 'z');
-    const entityId = `sensor.${id}_status`;
-    if (!this.content) {
-      this.innerHTML = `<style>${SHARED_STYLES}</style><div id="card-content"></div>`;
-      this.content = this.querySelector('#card-content');
-    }
-    this.content.innerHTML = renderEmployeeHTML(hass, entityId);
-  }
-  getCardSize() { return 1; }
-  static getStubConfig() { return { name: "Jan" }; }
-  static getConfigElement() { return document.createElement("employee-card-editor"); }
-}
-
-class EmployeeDashboard extends HTMLElement {
-  setConfig(config) { this.config = config; this.title = config.title || "Zespół"; }
-  set hass(hass) {
+    this._hass = hass;
     if (!this.content) {
       this.innerHTML = `
         <style>
@@ -186,44 +148,70 @@ class EmployeeDashboard extends HTMLElement {
           .dash-title { font-size: 1.4rem; font-weight: 800; margin-bottom: 15px; color: var(--primary-text-color); padding-left: 5px; }
         </style>
         <div class="dash-title">${this.title}</div>
+        <div id="filters" class="filter-bar"></div>
         <div id="dashboard-content" class="dashboard-container">Ładowanie...</div>
       `;
       this.content = this.querySelector('#dashboard-content');
+      this.filtersContainer = this.querySelector('#filters');
     }
+    this.render();
+  }
+
+  render() {
+    const hass = this._hass;
+    // 1. Znajdź wszystkich pracowników
     const employees = Object.keys(hass.states)
       .filter(eid => eid.startsWith('sensor.') && eid.endsWith('_status'))
       .sort();
 
     if (employees.length === 0) {
-      this.content.innerHTML = "<div style='padding:20px;text-align:center;opacity:0.6'>Brak pracowników.<br>Dodaj ich w panelu Employee Manager.</div>";
+      this.content.innerHTML = "<div style='padding:20px;opacity:0.6'>Brak pracowników.</div>";
       return;
     }
-    this.content.innerHTML = employees.map(eid => renderEmployeeHTML(hass, eid)).join('');
+
+    // 2. Zbierz unikalne grupy
+    const groups = new Set(['Wszyscy']);
+    employees.forEach(eid => {
+      const g = hass.states[eid].attributes.group;
+      if (g) groups.add(g);
+    });
+
+    // 3. Wygeneruj przyciski filtrów (tylko jeśli się zmieniły lub pierwszy raz)
+    // Uproszczone: generujemy zawsze, przeglądarka to udźwignie
+    this.filtersContainer.innerHTML = Array.from(groups).map(g =>
+      `<button class="filter-btn ${this.currentFilter === g ? 'active' : ''}" onclick="this.getRootNode().host.changeFilter('${g}')">${g}</button>`
+    ).join('');
+
+    // 4. Wyfiltruj i wyświetl karty
+    const filtered = employees.filter(eid => {
+      if (this.currentFilter === 'Wszyscy') return true;
+      return hass.states[eid].attributes.group === this.currentFilter;
+    });
+
+    if (filtered.length === 0) {
+      this.content.innerHTML = `<div style='padding:20px;opacity:0.6'>Brak pracowników w grupie ${this.currentFilter}.</div>`;
+    } else {
+      this.content.innerHTML = filtered.map(eid => renderEmployeeHTML(hass, eid)).join('');
+    }
   }
+
+  // Funkcja wywoływana po kliknięciu przycisku
+  changeFilter(group) {
+    this.currentFilter = group;
+    this.render();
+  }
+
   getCardSize() { return 3; }
 }
 
+// --- EDYTOR (Prosty) ---
 class EmployeeCardEditor extends HTMLElement {
-  setConfig(config) { this._config = config; this.render(); }
-  render() {
-    if (!this.innerHTML) {
-      this.innerHTML = `
-        <div class="card-config" style="padding:20px;">
-          <label style="font-weight:bold">Imię Pracownika</label>
-          <input type="text" id="name-input" style="width:100%; padding:8px; margin-top:5px;">
-        </div>`;
-      this.querySelector('#name-input').addEventListener('input', (e) =>
-        this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: { ...this._config, name: e.target.value } }, bubbles: true, composed: true }))
-      );
-    }
-    this.querySelector('#name-input').value = this._config.name || '';
-  }
+  setConfig(c) { this.c = c; this.render(); }
+  render() { this.innerHTML = `<div>Opcje dostępne w kodzie YAML</div>`; }
 }
 
 customElements.define('employee-card-editor', EmployeeCardEditor);
-customElements.define('employee-card', EmployeeCard);
 customElements.define('employee-dashboard', EmployeeDashboard);
 
 window.customCards = window.customCards || [];
-window.customCards.push({ type: "employee-card", name: "Pracownik (Pojedynczy)", description: "Karta jednego pracownika" });
-window.customCards.push({ type: "employee-dashboard", name: "Panel Zespołu (AUTO)", preview: true, description: "Automatycznie wyświetla wszystkich pracowników" });
+window.customCards.push({ type: "employee-dashboard", name: "Panel Zespołu (Filtry)", preview: true, description: "Automatyczna lista z filtrowaniem grup" });
