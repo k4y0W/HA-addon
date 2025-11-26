@@ -2,7 +2,10 @@ import json
 import os
 import logging
 import requests
-from flask import Flask, request, jsonify, render_template_string
+import csv
+import io
+from datetime import datetime
+from flask import Flask, request, jsonify, render_template_string, Response
 from employee_map import SENSOR_TYPES
 
 DATA_FILE = "/data/employees.json"
@@ -36,22 +39,28 @@ PRETTY_NAMES = {
     "battery": "Bateria",
     "signal_strength": "Sygnał",
     "pm25": "PM 2.5",
-    "illuminance": "Jasność"
+    "illuminance": "Jasność",
+    "connectivity": "Połączenie"
 }
 
 BLOCKED_PREFIXES = [
     "sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", 
     "sensor.zone", "sensor.automation", "sensor.script", 
-    "update.", "person.", "zone.", "sun."
+    "update.", "person.", "zone.", "sun.", "todo."
 ]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
 GENERATED_SUFFIXES = [
     "_status", "_czas_pracy", 
     "_temperatura", "_wilgotnosc", "_cisnienie", 
     "_moc", "_napiecie", "_natezenie", 
-    "_pm25", "_bateria"
+    "_pm25", "_bateria", "_jasnosc"
 ]
-
+CARDS_TO_INSTALL = [
+    "/local/employee-card.js",
+    "/local/community_cards/auto-entities.js",
+    "/local/community_cards/apexcharts-card.js",
+    "/local/community_cards/template-entity-row.js"
+]
 def load_employees():
     if not os.path.exists(DATA_FILE):
         return []
@@ -81,10 +90,12 @@ def get_clean_sensors():
                 
                 is_virtual = False
                 for suffix in GENERATED_SUFFIXES:
-                    if eid.endswith(suffix) and " - " in friendly_name:
+                    if eid.endswith(suffix):
                         is_virtual = True
                         break
                 if is_virtual: continue
+
+                if " - " in friendly_name: continue
 
                 if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
@@ -126,6 +137,43 @@ def get_ha_state(entity_id):
         pass
     return "-"
 
+def register_lovelace_resource():
+    token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
+    install_headers = {
+        "Authorization": f"Bearer {token_to_use}",
+        "Content-Type": "application/json",
+    }
+    
+    log_messages = []
+    success_count = 0
+
+    try:
+        get_resp = requests.get(f"{API_URL}/lovelace/resources", headers=install_headers)
+        if get_resp.status_code in [401, 403, 404]:
+            return False, "Brak uprawnień! Wymagany Token Administratora."
+        
+        current_resources = [r['url'] for r in get_resp.json()]
+
+        for card_url in CARDS_TO_INSTALL:
+            if card_url in current_resources:
+                continue # Już jest, pomijamy
+
+            payload = {"url": card_url, "type": "module"}
+            post_resp = requests.post(f"{API_URL}/lovelace/resources", headers=install_headers, json=payload)
+            
+            if post_resp.status_code in [200, 201]:
+                success_count += 1
+                log_messages.append(f"Dodano: {card_url}")
+            else:
+                log_messages.append(f"Błąd {card_url}: {post_resp.text}")
+
+        if success_count > 0:
+            return True, f"Zainstalowano {success_count} kart! {', '.join(log_messages)}"
+        else:
+            return True, "Wszystkie karty są już zainstalowane."
+
+    except Exception as e: return False, str(e)
+
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -161,6 +209,9 @@ HTML_PAGE = """
 
     <div class="tab-content">
         <div class="tab-pane fade show active" id="pills-monitor">
+            <div class="d-flex justify-content-end mb-3">
+                <a href="api/export_csv" target="_blank" class="btn btn-outline-dark btn-sm"><i class="mdi mdi-file-excel"></i> Pobierz Raport (CSV)</a>
+            </div>
             <div class="row g-3" id="dashboard-grid"></div>
         </div>
 
@@ -216,18 +267,17 @@ HTML_PAGE = """
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <p>Plik karty został już utworzony automatycznie. Aby jej użyć:</p>
+        <p>Aby użyć karty na pulpicie:</p>
         <ol>
-            <li>Skopiuj ten link: <br>
-                <div class="input-group mt-1 mb-3">
-                    <input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput" readonly>
-                    <button class="btn btn-outline-primary" id="btn-copy" onclick="copyLink()">Kopiuj</button>
-                </div>
-            </li>
-            <li>Przejdź do: <b>Ustawienia → Pulpity → Zasoby</b></li>
-            <li>Kliknij <b>Dodaj zasób</b> i wklej link.</li>
+            <li>Skopiuj link poniżej.</li>
+            <li>Otwórz ustawienia zasobów.</li>
+            <li>Wklej link i wybierz <b>Moduł JavaScript</b>.</li>
         </ol>
-        <a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100"><i class="mdi mdi-open-in-new"></i> Otwórz Ustawienia Zasobów</a>
+        <div class="input-group mb-3">
+            <input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput" readonly>
+            <button class="btn btn-outline-primary" id="btn-copy" onclick="copyLink()">Kopiuj</button>
+        </div>
+        <a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100">Otwórz Ustawienia</a>
       </div>
     </div>
   </div>
@@ -250,7 +300,6 @@ HTML_PAGE = """
         const btn = document.getElementById("btn-copy");
         copyText.select();
         copyText.setSelectionRange(0, 99999);
-
         try {
             if (navigator.clipboard && window.isSecureContext) {
                 navigator.clipboard.writeText(copyText.value);
@@ -258,19 +307,35 @@ HTML_PAGE = """
                 document.execCommand('copy');
             }
             const originalHtml = btn.innerHTML;
-            btn.innerHTML = '<i class="mdi mdi-check"></i> Skopiowano!';
-            btn.classList.remove('btn-outline-primary');
-            btn.classList.add('btn-success');
+            btn.innerHTML = 'Skopiowano!';
+            btn.classList.replace('btn-outline-primary', 'btn-success');
             setTimeout(() => {
                 btn.innerHTML = originalHtml;
-                btn.classList.add('btn-outline-primary');
-                btn.classList.remove('btn-success');
+                btn.classList.replace('btn-success', 'btn-outline-primary');
             }, 2000);
-        } catch (err) { console.error("Błąd kopiowania", err); }
+        } catch (err) {}
     }
 
     async function installCard() {
-        installModal.show();
+        const btn = document.getElementById('tab-install');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '⏳ ...';
+        try {
+            const res = await fetch('api/install_card', { method: 'POST' });
+            const data = await res.json();
+            if(data.success) {
+                alert("Automatyczna instalacja zablokowana. Musisz dodać te zasoby ręcznie:\n\n" +
+                        "/local/employee-card.js\n" +
+                        "/local/community_cards/auto-entities.js\n" +
+                        "/local/community_cards/apexcharts-card.js\n" +
+                        "/local/community_cards/template-entity-row.js");
+            } else {
+                installModal.show();
+            }
+        } catch (e) { 
+            installModal.show();
+        }
+        btn.innerHTML = originalText;
     }
 
     function renderSensorList(filterText = "") {
@@ -321,20 +386,12 @@ HTML_PAGE = """
             const grid = document.getElementById('dashboard-grid');
             if(data.length === 0) { grid.innerHTML = '<p class="text-center mt-5">Brak danych.</p>'; return; }
             grid.innerHTML = data.map(emp => `
-                <div class="col-md-6 col-xl-4">
-                    <div class="card h-100">
-                        <div class="card-body">
-                            <div class="d-flex align-items-center mb-3">
-                                <div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
-                                <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small></div>
-                                <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div>
-                            </div>
-                            <div class="row g-2">${emp.measurements.map(m => 
-                                `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`
-                            ).join('')}</div>
-                        </div>
-                    </div>
-                </div>`).join('');
+                <div class="col-md-6 col-xl-4"><div class="card h-100"><div class="card-body">
+                    <div class="d-flex align-items-center mb-3"><div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
+                    <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small></div>
+                    <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div></div>
+                    <div class="row g-2">${emp.measurements.map(m => `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`).join('')}</div>
+                </div></div></div>`).join('');
         } catch(e){}
     }
 
@@ -369,9 +426,26 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
+@app.route('/api/export_csv')
+def export_csv():
+    import csv
+    import io
+    from datetime import datetime
+    employees = load_employees()
+    si = io.StringIO()
+    cw = csv.writer(si, delimiter=';')
+    cw.writerow(["Data", "Imię", "Status", "Czas Pracy (min)", "Pomiary"])
+    today = datetime.now().strftime("%Y-%m-%d %H:%M")
+    for emp in employees:
+        name = emp['name']
+        safe = name.lower().replace(" ", "_")
+        status = get_ha_state(f"sensor.{safe}_status")
+        time = get_ha_state(f"sensor.{safe}_czas_pracy")
+        cw.writerow([today, name, status, time, len(emp.get('sensors',[]))])
+    return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport_{datetime.now().strftime('%Y%m%d')}.csv"})
+
 @app.route('/api/employees', methods=['GET'])
 def api_get(): return jsonify(load_employees())
-
 @app.route('/api/employees', methods=['POST'])
 def api_post():
     data = request.json
@@ -380,14 +454,12 @@ def api_post():
     emps.append(data)
     save_employees(emps)
     return jsonify({"status":"ok"})
-
 @app.route('/api/employees/<int:i>', methods=['DELETE'])
 def api_del(i):
     emps = load_employees()
     if 0 <= i < len(emps): del emps[i]
     save_employees(emps)
     return jsonify({"status":"ok"})
-
 @app.route('/api/monitor', methods=['GET'])
 def api_monitor():
     emps = load_employees()
@@ -416,3 +488,7 @@ def api_monitor():
             except: pass
         res.append({"name": emp['name'], "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
+@app.route('/api/install_card', methods=['POST'])
+def api_install_card():
+    success, msg = register_lovelace_resource()
+    return jsonify({"success": success, "message": msg})
