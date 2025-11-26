@@ -21,7 +21,7 @@ download_card() {
 # Pobieramy karty (ignorując błędy)
 download_card "https://github.com/thomasloven/lovelace-auto-entities/releases/latest/download/auto-entities.js" "/config/www/community_cards/auto-entities.js"
 download_card "https://github.com/RomRider/apexcharts-card/releases/latest/download/apexcharts-card.js" "/config/www/community_cards/apexcharts-card.js"
-download_card "https://github.com/thomasloven/lovelace-template-entity-row/releases/latest/download/template-entity-row.js" "/config/www/community_cards/template-entity-row.js"
+download_card "https://raw.githubusercontent.com/thomasloven/lovelace-template-entity-row/master/dist/template-entity-row.js" "/config/www/community_cards/template-entity-row.js"
 
 # Kopiujemy Twoją kartę
 if [ -f "/employee-card.js" ]; then
