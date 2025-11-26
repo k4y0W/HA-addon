@@ -6,7 +6,6 @@ import csv
 import io
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, Response
-from employee_map import SENSOR_TYPES
 
 DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
@@ -28,6 +27,14 @@ HEADERS = {
 
 app = Flask(__name__)
 
+# Lista końcówek do wyczyszczenia przy usuwaniu pracownika
+SUFFIXES_TO_CLEAN = [
+    "_status", "_czas_pracy", 
+    "_temperatura", "_wilgotnosc", "_cisnienie", 
+    "_moc", "_napiecie", "_natezenie", 
+    "_bateria", "_pm25", "_jasnosc"
+]
+
 PRETTY_NAMES = {
     "temperature": "Temperatura", "humidity": "Wilgotność", "pressure": "Ciśnienie",
     "power": "Moc", "energy": "Energia", "voltage": "Napięcie", "current": "Natężenie",
@@ -36,7 +43,7 @@ PRETTY_NAMES = {
 }
 BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo."]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
-GENERATED_SUFFIXES = ["_status", "_czas_pracy", "_temperatura", "_wilgotnosc", "_cisnienie", "_moc", "_napiecie", "_natezenie", "_pm25", "_bateria", "_jasnosc"]
+GENERATED_SUFFIXES = SUFFIXES_TO_CLEAN
 
 def load_json(file_path):
     if not os.path.exists(file_path):
@@ -51,6 +58,14 @@ def load_json(file_path):
 
 def save_json(file_path, data):
     with open(file_path, 'w') as f: json.dump(data, f, indent=4)
+
+# --- NOWA FUNKCJA DO USUWANIA STANU Z HA ---
+def delete_ha_state(entity_id):
+    try:
+        # Metoda DELETE usuwa encję z pamięci HA natychmiast
+        requests.delete(f"{API_URL}/states/{entity_id}", headers=HEADERS)
+    except Exception as e:
+        print(f"Blad usuwania {entity_id}: {e}", flush=True)
 
 def get_clean_sensors():
     sensors = []
@@ -257,7 +272,7 @@ HTML_PAGE = """
     
     let currentFilter = 'Wszyscy';
     let allEmployeesData = [];
-    let currentGroups = []; // Przechowujemy grupy globalnie
+    let currentGroups = [];
 
     function updateCount() { 
         const count = document.querySelectorAll('#sensorList input:checked').length;
@@ -338,13 +353,10 @@ HTML_PAGE = """
         const res = await fetch('api/groups');
         currentGroups = await res.json();
         
-        // Lista w ustawieniach
         document.getElementById('groupList').innerHTML = currentGroups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
         
-        // Select w formularzu
         document.getElementById('empGroup').innerHTML = currentGroups.map(g => `<option value="${g}">${g}</option>`).join('');
         
-        // Odświeżamy pasek filtrów
         renderFilterBar();
     }
 
@@ -371,13 +383,12 @@ HTML_PAGE = """
     // --- MONITOR ---
     function filterMonitor(group) {
         currentFilter = group;
-        renderFilterBar(); // Odśwież wygląd przycisków
-        renderGrid(); // Przerysuj listę
+        renderFilterBar();
+        renderGrid();
     }
 
     function renderGrid() {
         const grid = document.getElementById('dashboard-grid');
-        // Filtrowanie danych
         const filtered = currentFilter === 'Wszyscy' ? allEmployeesData : allEmployeesData.filter(e => e.group === currentFilter);
         
         if(filtered.length === 0) { grid.innerHTML = '<p class="text-center mt-5 text-muted">Brak pracowników w tej grupie.</p>'; return; }
@@ -467,6 +478,7 @@ def del_group(name):
 
 @app.route('/api/employees', methods=['GET'])
 def api_get(): return jsonify(load_json(DATA_FILE))
+
 @app.route('/api/employees', methods=['POST'])
 def api_post():
     data = request.json
@@ -475,12 +487,31 @@ def api_post():
     emps.append(data)
     save_json(DATA_FILE, emps)
     return jsonify({"status":"ok"})
+
+# --- ZAKTUALIZOWANA METODA USUWANIA ---
 @app.route('/api/employees/<int:i>', methods=['DELETE'])
 def api_del(i):
     emps = load_json(DATA_FILE)
-    if 0 <= i < len(emps): del emps[i]
-    save_json(DATA_FILE, emps)
+    if 0 <= i < len(emps):
+        # 1. Pobierz dane o pracowniku, którego usuwamy
+        to_delete = emps[i]
+        safe_name = to_delete['name'].lower().replace(" ", "_")
+        
+        # 2. Usuń główne encje z HA (Status i Czas)
+        delete_ha_state(f"sensor.{safe_name}_status")
+        delete_ha_state(f"sensor.{safe_name}_czas_pracy")
+        
+        # 3. Usuń wszystkie wygenerowane encje (moc, temp, itp.)
+        for suffix in SUFFIXES_TO_CLEAN:
+            delete_ha_state(f"sensor.{safe_name}{suffix}")
+            
+        # 4. Na końcu usuń z pliku JSON
+        del emps[i]
+        save_json(DATA_FILE, emps)
+        
     return jsonify({"status":"ok"})
+# --------------------------------------
+
 @app.route('/api/monitor', methods=['GET'])
 def api_monitor():
     emps = load_json(DATA_FILE)
@@ -506,6 +537,7 @@ def api_monitor():
             except: pass
         res.append({"name": emp['name'], "group": emp.get('group', 'Domyślna'), "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
+
 @app.route('/api/export_csv')
 def export_csv():
     import csv, io
@@ -521,7 +553,11 @@ def export_csv():
         if time and '.' in time: time = time.replace('.', ',')
         cw.writerow([today, e['name'], e.get('group', ''), status, time])
     return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport.csv"})
+
 @app.route('/api/install_card', methods=['POST'])
 def api_install_card():
     success, msg = register_lovelace_resource()
     return jsonify({"success": success, "message": msg})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
