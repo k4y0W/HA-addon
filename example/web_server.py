@@ -6,7 +6,17 @@ from flask import Flask, request, jsonify, render_template_string
 from employee_map import SENSOR_TYPES
 
 DATA_FILE = "/data/employees.json"
+OPTIONS_FILE = "/data/options.json"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+USER_TOKEN = ""
+
+try:
+    with open(OPTIONS_FILE, 'r') as f:
+        opts = json.load(f)
+        USER_TOKEN = opts.get("ha_token", "")
+except:
+    pass
+
 API_URL = "http://supervisor/core/api"
 HEADERS = {
     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
@@ -15,7 +25,6 @@ HEADERS = {
 
 app = Flask(__name__)
 
-# --- SŁOWNIK TŁUMACZEŃ ---
 PRETTY_NAMES = {
     "temperature": "Temperatura",
     "humidity": "Wilgotność",
@@ -30,17 +39,31 @@ PRETTY_NAMES = {
     "illuminance": "Jasność"
 }
 
-BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun."]
+BLOCKED_PREFIXES = [
+    "sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", 
+    "sensor.zone", "sensor.automation", "sensor.script", 
+    "update.", "person.", "zone.", "sun."
+]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
+GENERATED_SUFFIXES = [
+    "_status", "_czas_pracy", 
+    "_temperatura", "_wilgotnosc", "_cisnienie", 
+    "_moc", "_napiecie", "_natezenie", 
+    "_pm25", "_bateria"
+]
 
 def load_employees():
-    if not os.path.exists(DATA_FILE): return []
+    if not os.path.exists(DATA_FILE):
+        return []
     try:
-        with open(DATA_FILE, 'r') as f: return json.load(f)
-    except: return []
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return []
 
 def save_employees(data):
-    with open(DATA_FILE, 'w') as f: json.dump(data, f, indent=4)
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
 
 def get_clean_sensors():
     sensors = []
@@ -55,7 +78,14 @@ def get_clean_sensors():
                 device_class = attrs.get("device_class")
                 
                 if not (eid.startswith("sensor.") or eid.startswith("binary_sensor.") or eid.startswith("switch.") or eid.startswith("light.")): continue
-                if eid.endswith("_status") or eid.endswith("_czas_pracy") or "_wybrany_pomiar" in eid: continue
+                
+                is_virtual = False
+                for suffix in GENERATED_SUFFIXES:
+                    if eid.endswith(suffix) and " - " in friendly_name:
+                        is_virtual = True
+                        break
+                if is_virtual: continue
+
                 if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
                 if "scene_history" in eid or "message" in eid: continue
@@ -66,6 +96,7 @@ def get_clean_sensors():
                 if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
+                elif unit == "kWh": main_label = "Energia"
                 elif unit == "hPa": main_label = "Ciśnienie"
                 elif unit == "%": main_label = "Wilgotność"
                 
@@ -78,7 +109,8 @@ def get_clean_sensors():
                     "device_class": device_class
                 })
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
-    except: pass
+    except:
+        pass
     return sensors
 
 def get_ha_state(entity_id):
@@ -86,12 +118,14 @@ def get_ha_state(entity_id):
         resp = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
         if resp.status_code == 200:
             state = resp.json().get("state")
-            try: return str(round(float(state), 1))
-            except: return state
-    except: pass
+            try:
+                return str(round(float(state), 1))
+            except:
+                return state
+    except:
+        pass
     return "-"
 
-# --- HTML (Frontend) ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -121,7 +155,7 @@ HTML_PAGE = """
         <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
             <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
             <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
-            <li class="nav-item"><button class="nav-link text-success fw-bold" onclick="showInstallInfo()"><i class="mdi mdi-information-outline"></i> Instalacja Karty</button></li>
+            <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj Kartę</button></li>
         </ul>
     </div>
 
@@ -187,7 +221,7 @@ HTML_PAGE = """
             <li>Skopiuj ten link: <br>
                 <div class="input-group mt-1 mb-3">
                     <input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput" readonly>
-                    <button class="btn btn-outline-primary" onclick="copyLink()">Kopiuj</button>
+                    <button class="btn btn-outline-primary" id="btn-copy" onclick="copyLink()">Kopiuj</button>
                 </div>
             </li>
             <li>Przejdź do: <b>Ustawienia → Pulpity → Zasoby</b></li>
@@ -206,67 +240,39 @@ HTML_PAGE = """
     const countBadge = document.getElementById('count-badge');
     const installModal = new bootstrap.Modal(document.getElementById('installModal'));
 
-    function showInstallInfo() {
-        installModal.show();
-    }
-
-    function copyLink() {
-        const copyText = document.getElementById("linkInput");
-        copyText.select();
-        copyText.setSelectionRange(0, 99999); 
-        
-        try {
-            document.execCommand('copy');
-            alert("Skopiowano do schowka: " + copyText.value);
-        } catch (err) {
-            alert("Nie udało się skopiować automatycznie. Zaznacz tekst i wciśnij CTRL+C.");
-        }
-    }
-
     function updateCount() { 
         const count = document.querySelectorAll('#sensorList input:checked').length;
         countBadge.innerText = count + " wybranych";
     }
-    async function installCard() {
-        const btn = document.getElementById('tab-install');
-        const originalContent = btn.innerHTML;
-        
-        // 1. Próba automatyczna
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-        try {
-            const res = await fetch('api/install_card', { method: 'POST' });
-            const data = await res.json();
-            
-            if(data.success) {
-                btn.className = "nav-link text-success fw-bold";
-                btn.innerHTML = '<i class="mdi mdi-check"></i> Gotowe! Odśwież (F5)';
-            } else {
-                throw new Error("Fallback needed");
-            }
-        } catch (e) {
-            const link = "/local/employee-card.js";
-            
-            if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(link);
-            } else {
-                const textArea = document.createElement("textarea");
-                textArea.value = link;
-                document.body.appendChild(textArea);
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-            }
 
-            btn.className = "nav-link text-warning fw-bold";
-            btn.innerHTML = '<i class="mdi mdi-content-copy"></i> Skopiowano link!';
-            
+    function copyLink() {
+        const copyText = document.getElementById("linkInput");
+        const btn = document.getElementById("btn-copy");
+        copyText.select();
+        copyText.setSelectionRange(0, 99999);
+
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(copyText.value);
+            } else {
+                document.execCommand('copy');
+            }
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="mdi mdi-check"></i> Skopiowano!';
+            btn.classList.remove('btn-outline-primary');
+            btn.classList.add('btn-success');
             setTimeout(() => {
-                btn.innerHTML = originalContent;
-                btn.className = "nav-link text-success fw-bold";
-                window.open("/config/lovelace/resources", "_blank");
-            }, 1500);
-        }
+                btn.innerHTML = originalHtml;
+                btn.classList.add('btn-outline-primary');
+                btn.classList.remove('btn-success');
+            }, 2000);
+        } catch (err) { console.error("Błąd kopiowania", err); }
     }
+
+    async function installCard() {
+        installModal.show();
+    }
+
     function renderSensorList(filterText = "") {
         chkContainer.innerHTML = "";
         if (!ALL_SENSORS || ALL_SENSORS.length === 0) { chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów.</div>'; return; }
@@ -363,7 +369,6 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
-# --- API ---
 @app.route('/api/employees', methods=['GET'])
 def api_get(): return jsonify(load_employees())
 
@@ -391,22 +396,22 @@ def api_monitor():
         safe = emp['name'].lower().replace(" ","_")
         status = get_ha_state(f"sensor.{safe}_status") or "N/A"
         time = get_ha_state(f"sensor.{safe}_czas_pracy") or "0"
-        
         meas = []
         for entity_id in emp.get('sensors', []):
             val = get_ha_state(entity_id)
             try:
                 r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
                 data = r.json()
-                unit = data['attributes'].get('unit_of_measurement', '')
-                
                 attrs = data['attributes']
-                dc = attrs.get('device_class')
                 friendly_name = attrs.get('friendly_name', entity_id)
-                label = PRETTY_NAMES.get(dc, friendly_name)
-                if unit == "W": label = "Moc"
+                dc = attrs.get('device_class')
+                unit = attrs.get('unit_of_measurement', '')
+                label = friendly_name
+                if dc in PRETTY_NAMES: label = PRETTY_NAMES[dc]
+                elif unit == "W": label = "Moc"
                 elif unit == "V": label = "Napięcie"
-
+                elif unit == "hPa": label = "Ciśnienie"
+                elif unit == "%": label = "Wilgotność"
                 meas.append({"label": label, "value": val, "unit": unit})
             except: pass
         res.append({"name": emp['name'], "status": status, "work_time": time, "measurements": meas})
