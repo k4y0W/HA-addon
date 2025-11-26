@@ -29,24 +29,44 @@ HEADERS = {
 app = Flask(__name__)
 
 PRETTY_NAMES = {
-    "temperature": "Temperatura", "humidity": "Wilgotność", "pressure": "Ciśnienie",
-    "power": "Moc", "energy": "Energia", "voltage": "Napięcie", "current": "Natężenie",
-    "battery": "Bateria", "signal_strength": "Sygnał", "pm25": "PM 2.5", "illuminance": "Jasność",
+    "temperature": "Temperatura",
+    "humidity": "Wilgotność",
+    "pressure": "Ciśnienie",
+    "power": "Moc",
+    "energy": "Energia",
+    "voltage": "Napięcie",
+    "current": "Natężenie",
+    "battery": "Bateria",
+    "signal_strength": "Sygnał",
+    "pm25": "PM 2.5",
+    "illuminance": "Jasność",
     "connectivity": "Połączenie"
 }
-BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo."]
+
+BLOCKED_PREFIXES = [
+    "sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", 
+    "sensor.zone", "sensor.automation", "sensor.script", 
+    "update.", "person.", "zone.", "sun.", "todo."
+]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
-GENERATED_SUFFIXES = ["_status", "_czas_pracy", "_temperatura", "_wilgotnosc", "_cisnienie", "_moc", "_napiecie", "_natezenie", "_pm25", "_bateria", "_jasnosc"]
+GENERATED_SUFFIXES = [
+    "_status", "_czas_pracy", 
+    "_temperatura", "_wilgotnosc", "_cisnienie", 
+    "_moc", "_napiecie", "_natezenie", 
+    "_pm25", "_bateria", "_jasnosc"
+]
 
 def load_employees():
-    if not os.path.exists(DATA_FILE): 
+    if not os.path.exists(DATA_FILE):
         return []
-    try: 
-        with open(DATA_FILE, 'r') as f: return json.load(f)
-    except: return []
+    try:
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return []
 
 def save_employees(data):
-    with open(DATA_FILE, 'w') as f: 
+    with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=4)
 
 def get_clean_sensors():
@@ -65,10 +85,12 @@ def get_clean_sensors():
                 
                 is_virtual = False
                 for suffix in GENERATED_SUFFIXES:
-                    if eid.endswith(suffix) and " - " in friendly_name:
+                    if eid.endswith(suffix):
                         is_virtual = True
                         break
                 if is_virtual: continue
+
+                if " - " in friendly_name: continue
 
                 if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
@@ -76,6 +98,7 @@ def get_clean_sensors():
 
                 unit = attrs.get("unit_of_measurement", "")
                 main_label = friendly_name 
+                
                 if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
@@ -83,9 +106,17 @@ def get_clean_sensors():
                 elif unit == "hPa": main_label = "Ciśnienie"
                 elif unit == "%": main_label = "Wilgotność"
                 
-                sensors.append({"id": eid, "main_label": main_label, "sub_label": friendly_name, "unit": unit, "state": entity.get("state", "-"), "device_class": device_class})
+                sensors.append({
+                    "id": eid,
+                    "main_label": main_label,
+                    "sub_label": friendly_name,
+                    "unit": unit,
+                    "state": entity.get("state", "-"),
+                    "device_class": device_class
+                })
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
-    except: pass
+    except:
+        pass
     return sensors
 
 def get_ha_state(entity_id):
@@ -93,24 +124,36 @@ def get_ha_state(entity_id):
         resp = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
         if resp.status_code == 200:
             state = resp.json().get("state")
-            try: return str(round(float(state), 1))
-            except: return state
-    except: pass
+            try:
+                return str(round(float(state), 1))
+            except:
+                return state
+    except:
+        pass
     return "-"
 
 def register_lovelace_resource():
     CARD_URL = "/local/employee-card.js"
     token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
-    install_headers = {"Authorization": f"Bearer {token_to_use}", "Content-Type": "application/json"}
+    install_headers = {
+        "Authorization": f"Bearer {token_to_use}",
+        "Content-Type": "application/json",
+    }
     try:
         url = f"{API_URL}/lovelace/resources"
+        if USER_TOKEN: pass 
+
         get_resp = requests.get(url, headers=install_headers)
-        if get_resp.status_code in [401, 403, 404]: return False, "Brak uprawnień API."
+        if get_resp.status_code in [401, 403, 404]:
+            return False, "Brak uprawnień API."
+        
         resources = get_resp.json()
         for res in resources:
             if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
+
         payload = {"url": CARD_URL, "type": "module"}
         post_resp = requests.post(url, headers=install_headers, json=payload)
+        
         if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
         else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
@@ -200,8 +243,28 @@ HTML_PAGE = """
     </div>
 </div>
 
-<div class="modal fade" id="installModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title">Instalacja Karty</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-  <div class="modal-body"><p>Automatyczna instalacja zablokowana. Dodaj te linki ręcznie w zasobach:</p><ul class="list-group mb-3"><li class="list-group-item user-select-all">/local/employee-card.js</li><li class="list-group-item user-select-all">/config/www/community_cards/auto-entities.js</li><li class="list-group-item user-select-all">/config/www/community_cards/apexcharts-card.js</li></ul><a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100">Otwórz Ustawienia</a></div></div></div>
+<div class="modal fade" id="installModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-light">
+        <h5 class="modal-title">Instalacja Karty Lovelace</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p>Aby użyć karty na pulpicie:</p>
+        <ol>
+            <li>Skopiuj link poniżej.</li>
+            <li>Otwórz ustawienia zasobów.</li>
+            <li>Wklej link i wybierz <b>Moduł JavaScript</b>.</li>
+        </ol>
+        <div class="input-group mb-3">
+            <input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput" readonly>
+            <button class="btn btn-outline-primary" id="btn-copy" onclick="copyLink()">Kopiuj</button>
+        </div>
+        <a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100">Otwórz Ustawienia</a>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -211,16 +274,47 @@ HTML_PAGE = """
     const countBadge = document.getElementById('count-badge');
     const installModal = new bootstrap.Modal(document.getElementById('installModal'));
 
-    function updateCount() { countBadge.innerText = document.querySelectorAll('#sensorList input:checked').length + " wybranych"; }
+    function updateCount() { 
+        const count = document.querySelectorAll('#sensorList input:checked').length;
+        countBadge.innerText = count + " wybranych";
+    }
+
+    function copyLink() {
+        const copyText = document.getElementById("linkInput");
+        const btn = document.getElementById("btn-copy");
+        copyText.select();
+        copyText.setSelectionRange(0, 99999);
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(copyText.value);
+            } else {
+                document.execCommand('copy');
+            }
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = 'Skopiowano!';
+            btn.classList.replace('btn-outline-primary', 'btn-success');
+            setTimeout(() => {
+                btn.innerHTML = originalHtml;
+                btn.classList.replace('btn-success', 'btn-outline-primary');
+            }, 2000);
+        } catch (err) {}
+    }
 
     async function installCard() {
         const btn = document.getElementById('tab-install');
-        const originalText = btn.innerHTML; btn.innerHTML = '⏳ ...';
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '⏳ ...';
         try {
             const res = await fetch('api/install_card', { method: 'POST' });
             const data = await res.json();
-            if(data.success) alert("SUKCES! Odśwież F5."); else installModal.show();
-        } catch (e) { installModal.show(); }
+            if(data.success) {
+                alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
+            } else {
+                installModal.show();
+            }
+        } catch (e) { 
+            installModal.show();
+        }
         btn.innerHTML = originalText;
     }
 
@@ -236,6 +330,8 @@ HTML_PAGE = """
             div.className = 'sensor-tile rounded p-2 d-flex align-items-center';
             let icon = "mdi-eye-circle-outline";
             if (s.main_label === "Temperatura") icon = "mdi-thermometer";
+            else if (s.main_label === "Wilgotność") icon = "mdi-water-percent";
+            else if (s.main_label === "Ciśnienie") icon = "mdi-gauge";
             else if (s.main_label === "Moc") icon = "mdi-lightning-bolt";
             else if (s.main_label === "Bateria") icon = "mdi-battery";
 
@@ -272,9 +368,9 @@ HTML_PAGE = """
             grid.innerHTML = data.map(emp => `
                 <div class="col-md-6 col-xl-4"><div class="card h-100"><div class="card-body">
                     <div class="d-flex align-items-center mb-3"><div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
-                    <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small>● ${emp.status}</small></div>
-                    <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small">MIN</div></div></div>
-                    <div class="row g-2">${emp.measurements.map(m => `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small>${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`).join('')}</div>
+                    <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small></div>
+                    <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div></div>
+                    <div class="row g-2">${emp.measurements.map(m => `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`).join('')}</div>
                 </div></div></div>`).join('');
         } catch(e){}
     }
@@ -292,6 +388,7 @@ HTML_PAGE = """
         const name = document.getElementById('empName').value;
         const selected = [];
         document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
+        if(selected.length === 0) return alert("Wybierz czujnik!");
         await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, sensors: selected}) });
         document.getElementById('empName').value = '';
         renderSensorList(); loadConfig(); refreshMonitor(); alert('Zapisano!');
@@ -309,22 +406,27 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
-# ... (RESZTA API BEZ ZMIAN - kopiujesz z dołu poprzedniego pliku)
 @app.route('/api/export_csv')
 def export_csv():
-    import csv, io
+    import csv
+    import io
     from datetime import datetime
-    emps = load_employees()
-    si = io.StringIO(); cw = csv.writer(si, delimiter=';')
-    cw.writerow(["Data", "Imie", "Status", "Czas (min)"])
+    employees = load_employees()
+    si = io.StringIO()
+    cw = csv.writer(si, delimiter=';')
+    cw.writerow(["Data", "Imie", "Status", "Czas Pracy (min)", "Pomiary"])
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
-    for e in emps:
-        safe = e['name'].lower().replace(" ", "_")
+    for emp in employees:
+        name = emp['name']
+        safe = name.lower().replace(" ", "_")
         status = get_ha_state(f"sensor.{safe}_status")
         time = get_ha_state(f"sensor.{safe}_czas_pracy")
-        if time and '.' in time: time = time.replace('.', ',')
-        cw.writerow([today, e['name'], status, time])
-    return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport.csv"})
+        if time and '.' in time:
+            time = time.replace('.', ',')
+        power_sensor = "Brak"
+        cw.writerow([today, name, status, time, len(emp.get('sensors',[]))])
+    return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport_{datetime.now().strftime('%Y%m%d')}.csv"})
+
 @app.route('/api/employees', methods=['GET'])
 def api_get(): return jsonify(load_employees())
 @app.route('/api/employees', methods=['POST'])
@@ -362,6 +464,9 @@ def api_monitor():
                 label = friendly_name
                 if dc in PRETTY_NAMES: label = PRETTY_NAMES[dc]
                 elif unit == "W": label = "Moc"
+                elif unit == "V": label = "Napięcie"
+                elif unit == "hPa": label = "Ciśnienie"
+                elif unit == "%": label = "Wilgotność"
                 meas.append({"label": label, "value": val, "unit": unit})
             except: pass
         res.append({"name": emp['name'], "status": status, "work_time": time, "measurements": meas})
