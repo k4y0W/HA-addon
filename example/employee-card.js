@@ -6,7 +6,8 @@ const KNOWN_SENSOR_TYPES = [
   { suffix: 'napiecie', icon: 'mdi:sine-wave', unit: 'V' },
   { suffix: 'natezenie', icon: 'mdi:current-ac', unit: 'A' },
   { suffix: 'bateria', icon: 'mdi:battery', unit: '%' },
-  { suffix: 'pm25', icon: 'mdi:blur', unit: 'μg/m³' }
+  { suffix: 'pm25', icon: 'mdi:blur', unit: 'μg/m³' },
+  { suffix: 'pm25_density', icon: 'mdi:blur', unit: 'μg/m³' }
 ];
 
 const SHARED_STYLES = `
@@ -32,51 +33,46 @@ const SHARED_STYLES = `
     font-weight: bold;
   }
   
-  /* Bardziej nasycone kolory statusów */
   .is-working { background: #E8F5E9; color: #1B5E20; border: 2px solid #4CAF50; }
   .is-idle { background: #FFFDE7; color: #E65100; border: 2px solid #FFC107; }
   .is-absent { background: #FFEBEE; color: #B71C1C; border: 2px solid #EF5350; }
 
   .info { flex: 1; }
-  /* Ciemniejsze, większe czcionki */
-  .emp-name { 
-    font-weight: 800; 
-    font-size: 1.3rem; 
-    color: #111; /* Prawie czarny */
-    line-height: 1.2;
-  }
-  .emp-status { 
-    font-size: 1rem; 
-    color: #444; /* Ciemny szary */
-    font-weight: 600;
-    margin-top: 2px;
-  }
+  .emp-name { font-weight: 800; font-size: 1.3rem; color: var(--primary-text-color); line-height: 1.2; }
+  .emp-status { font-size: 1rem; color: var(--secondary-text-color); font-weight: 600; margin-top: 2px; }
   
   .stats { text-align: right; min-width: 80px; }
-  .time-val { 
-    font-size: 1.6rem; 
-    font-weight: 900; 
-    color: #000; /* Czarny */
+  .time-val { font-size: 1.6rem; font-weight: 900; color: var(--primary-text-color); }
+  .time-unit { font-size: 0.75rem; color: var(--secondary-text-color); font-weight: 700; text-transform: uppercase; }
+
+  /* Pasek Postępu (Wykres) */
+  .progress-container {
+    width: 100%;
+    height: 6px;
+    background-color: #f0f0f0;
+    border-radius: 3px;
+    margin-bottom: 12px;
+    overflow: hidden;
   }
-  .time-unit { 
-    font-size: 0.75rem; 
-    color: #555; 
-    font-weight: 700; 
-    text-transform: uppercase; 
+  .progress-bar {
+    height: 100%;
+    background-color: #4CAF50;
+    border-radius: 3px;
+    transition: width 0.5s ease-in-out;
   }
 
   .sensors-row { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 2px solid #f0f0f0; }
   .sensor-chip { 
     display: inline-flex; align-items: center; 
-    background: #f8f9fa; 
+    background: var(--secondary-background-color); 
     padding: 6px 12px; border-radius: 20px; 
     font-size: 0.9rem; 
     font-weight: 600;
-    color: #333; /* Ciemny tekst na chipach */
-    border: 1px solid #ddd;
+    color: var(--primary-text-color); 
+    border: 1px solid var(--divider-color, #ddd);
     box-shadow: 0 1px 2px rgba(0,0,0,0.05);
   }
-  .sensor-chip ha-icon { --mdc-icon-size: 18px; margin-right: 6px; color: #555; }
+  .sensor-chip ha-icon { --mdc-icon-size: 18px; margin-right: 6px; color: var(--secondary-text-color); }
 `;
 
 function renderEmployeeHTML(hass, entityId) {
@@ -85,16 +81,21 @@ function renderEmployeeHTML(hass, entityId) {
 
   const fullName = statusEntity.attributes.friendly_name.replace(' - Status', '');
   const baseId = entityId.replace('_status', '');
-  
+
   const state = statusEntity.state;
   let statusClass = 'is-absent';
   let iconName = 'mdi:account-off';
-  
+
   if (state === 'Pracuje') { statusClass = 'is-working'; iconName = 'mdi:laptop'; }
   else if (state === 'Obecny (Idle)') { statusClass = 'is-idle'; iconName = 'mdi:coffee'; }
 
   const timeEntity = hass.states[`${baseId}_czas_pracy`];
-  const timeVal = timeEntity ? Math.round(parseFloat(timeEntity.state)) : '--';
+  const timeVal = timeEntity ? Math.round(parseFloat(timeEntity.state)) : 0;
+
+  // Obliczanie paska postępu (Cel: 8h = 480 min)
+  const targetMinutes = 480;
+  let progressPct = (timeVal / targetMinutes) * 100;
+  if (progressPct > 100) progressPct = 100;
 
   let sensorsHtml = '';
   KNOWN_SENSOR_TYPES.forEach(type => {
@@ -123,6 +124,11 @@ function renderEmployeeHTML(hass, entityId) {
           <div class="time-unit">MINUT</div>
         </div>
       </div>
+      
+      <div class="progress-container" title="Postęp dnia pracy (Cel: 8h)">
+        <div class="progress-bar" style="width: ${progressPct}%"></div>
+      </div>
+
       ${sensorsHtml ? `<div class="sensors-row">${sensorsHtml}</div>` : ''}
     </div>
   `;
@@ -134,7 +140,7 @@ class EmployeeCard extends HTMLElement {
     this.config = config;
   }
   set hass(hass) {
-    const id = this.config.name.toLowerCase().trim().replace(/ /g, "_").replace(/ą/g,'a').replace(/ć/g,'c').replace(/ę/g,'e').replace(/ł/g,'l').replace(/ń/g,'n').replace(/ó/g,'o').replace(/ś/g,'s').replace(/ź/g,'z').replace(/ż/g,'z');
+    const id = this.config.name.toLowerCase().trim().replace(/ /g, "_").replace(/ą/g, 'a').replace(/ć/g, 'c').replace(/ę/g, 'e').replace(/ł/g, 'l').replace(/ń/g, 'n').replace(/ó/g, 'o').replace(/ś/g, 's').replace(/ź/g, 'z').replace(/ż/g, 'z');
     const entityId = `sensor.${id}_status`;
     if (!this.content) {
       this.innerHTML = `<style>${SHARED_STYLES}</style><div id="card-content"></div>`;
@@ -184,7 +190,7 @@ class EmployeeCardEditor extends HTMLElement {
           <label style="font-weight:bold">Imię Pracownika</label>
           <input type="text" id="name-input" style="width:100%; padding:8px; margin-top:5px;">
         </div>`;
-      this.querySelector('#name-input').addEventListener('input', (e) => 
+      this.querySelector('#name-input').addEventListener('input', (e) =>
         this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: { ...this._config, name: e.target.value } }, bubbles: true, composed: true }))
       );
     }

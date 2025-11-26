@@ -213,10 +213,9 @@ HTML_PAGE = """
     function copyLink() {
         const copyText = document.getElementById("linkInput");
         copyText.select();
-        copyText.setSelectionRange(0, 99999); // Dla urządzeń mobilnych
+        copyText.setSelectionRange(0, 99999); 
         
         try {
-            // Stara, ale niezawodna metoda dla iframe'ów
             document.execCommand('copy');
             alert("Skopiowano do schowka: " + copyText.value);
         } catch (err) {
@@ -245,14 +244,11 @@ HTML_PAGE = """
                 throw new Error("Fallback needed");
             }
         } catch (e) {
-            // 2. Plan B: Kopiowanie i otwieranie karty (Bez alertów)
             const link = "/local/employee-card.js";
             
-            // Kopiowanie do schowka (nowa metoda + stara)
             if (navigator.clipboard && window.isSecureContext) {
                 navigator.clipboard.writeText(link);
             } else {
-                // Fallback dla iframe bez https
                 const textArea = document.createElement("textarea");
                 textArea.value = link;
                 document.body.appendChild(textArea);
@@ -261,11 +257,9 @@ HTML_PAGE = """
                 document.body.removeChild(textArea);
             }
 
-            // Zmiana wyglądu przycisku
             btn.className = "nav-link text-warning fw-bold";
             btn.innerHTML = '<i class="mdi mdi-content-copy"></i> Skopiowano link!';
             
-            // Otwarcie ustawień w nowej karcie po 1 sekundzie
             setTimeout(() => {
                 btn.innerHTML = originalContent;
                 btn.className = "nav-link text-success fw-bold";
@@ -391,7 +385,6 @@ def api_del(i):
 
 @app.route('/api/monitor', methods=['GET'])
 def api_monitor():
-    # Tutaj tylko uproszczony odczyt, bo logika robi resztę
     emps = load_employees()
     res = []
     for emp in emps:
@@ -403,12 +396,10 @@ def api_monitor():
         for entity_id in emp.get('sensors', []):
             val = get_ha_state(entity_id)
             try:
-                # Próba pobrania jednostki do wyświetlania
                 r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
                 data = r.json()
                 unit = data['attributes'].get('unit_of_measurement', '')
                 
-                # Ustalanie etykiety
                 attrs = data['attributes']
                 dc = attrs.get('device_class')
                 friendly_name = attrs.get('friendly_name', entity_id)

@@ -43,4 +43,4 @@ SENSOR_TYPES = {
     }
 }
 
-SENSOR_MAP = SENSOR_TYPES
+SENSOR_MAP = SENSOR_TYPES #kompatibilność wsteczna, można później wywalić
