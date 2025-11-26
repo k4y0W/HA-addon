@@ -11,7 +11,7 @@ const KNOWN_SENSOR_TYPES = [
   { suffix: 'pm25_density', icon: 'mdi:blur', unit: 'μg/m³' }
 ];
 
-// --- STYLE CSS ---
+// --- STYLE ---
 const SHARED_STYLES = `
   .emp-card { 
     background: var(--ha-card-background, white); 
@@ -93,8 +93,9 @@ function renderEmployeeHTML(hass, entityId) {
   const timeEntity = hass.states[`${baseId}_czas_pracy`];
   const timeVal = timeEntity ? Math.round(parseFloat(timeEntity.state)) : 0;
 
-  // Pasek postępu (8h)
-  let progressPct = (timeVal / 480) * 100;
+  // Pasek postępu
+  const targetMinutes = 480;
+  let progressPct = (timeVal / targetMinutes) * 100;
   let progressClass = "";
   if (progressPct > 100) { progressPct = 100; progressClass = "over"; }
 
@@ -104,7 +105,11 @@ function renderEmployeeHTML(hass, entityId) {
     const sEnt = hass.states[sId];
     if (sEnt && sEnt.state !== 'unavailable' && sEnt.state !== 'unknown') {
       const unit = sEnt.attributes.unit_of_measurement || type.unit;
-      sensorsHtml += `<div class="sensor-chip"><ha-icon icon="${type.icon}"></ha-icon><span>${sEnt.state} ${unit}</span></div>`;
+      sensorsHtml += `
+        <div class="sensor-chip">
+          <ha-icon icon="${type.icon}"></ha-icon>
+          <span>${sEnt.state} ${unit}</span>
+        </div>`;
     }
   });
 
@@ -129,17 +134,41 @@ function renderEmployeeHTML(hass, entityId) {
 }
 
 // ============================================================
-// KARTA DASHBOARDU (AUTO Z FILTRAMI)
+// KARTA POJEDYNCZA
+// ============================================================
+class EmployeeCard extends HTMLElement {
+  setConfig(config) {
+    if (!config.name) throw new Error('Podaj imię!');
+    this.config = config;
+  }
+  set hass(hass) {
+    const id = this.config.name.toLowerCase().trim().replace(/ /g, "_").replace(/ą/g, 'a').replace(/ć/g, 'c').replace(/ę/g, 'e').replace(/ł/g, 'l').replace(/ń/g, 'n').replace(/ó/g, 'o').replace(/ś/g, 's').replace(/ź/g, 'z').replace(/ż/g, 'z');
+    const entityId = `sensor.${id}_status`;
+    if (!this.content) {
+      this.innerHTML = `<style>${SHARED_STYLES}</style><div id="card-content"></div>`;
+      this.content = this.querySelector('#card-content');
+    }
+    this.content.innerHTML = renderEmployeeHTML(hass, entityId);
+  }
+  getCardSize() { return 1; }
+  static getStubConfig() { return { name: "Jan" }; }
+  static getConfigElement() { return document.createElement("employee-card-editor"); }
+}
+
+// ============================================================
+// KARTA DASHBOARD (NAPRAWIONE PRZYCISKI)
 // ============================================================
 class EmployeeDashboard extends HTMLElement {
   setConfig(config) {
     this.config = config;
     this.title = config.title || "Zespół";
-    this.currentFilter = 'Wszyscy'; // Domyślny filtr
+    this.currentFilter = 'Wszyscy';
   }
 
   set hass(hass) {
     this._hass = hass;
+
+    // Rysujemy strukturę tylko raz
     if (!this.content) {
       this.innerHTML = `
         <style>
@@ -154,12 +183,12 @@ class EmployeeDashboard extends HTMLElement {
       this.content = this.querySelector('#dashboard-content');
       this.filtersContainer = this.querySelector('#filters');
     }
+
     this.render();
   }
 
   render() {
     const hass = this._hass;
-    // 1. Znajdź wszystkich pracowników
     const employees = Object.keys(hass.states)
       .filter(eid => eid.startsWith('sensor.') && eid.endsWith('_status'))
       .sort();
@@ -169,20 +198,32 @@ class EmployeeDashboard extends HTMLElement {
       return;
     }
 
-    // 2. Zbierz unikalne grupy
+    // 1. Zbieramy grupy
     const groups = new Set(['Wszyscy']);
     employees.forEach(eid => {
       const g = hass.states[eid].attributes.group;
       if (g) groups.add(g);
     });
 
-    // 3. Wygeneruj przyciski filtrów (tylko jeśli się zmieniły lub pierwszy raz)
-    // Uproszczone: generujemy zawsze, przeglądarka to udźwignie
-    this.filtersContainer.innerHTML = Array.from(groups).map(g =>
-      `<button class="filter-btn ${this.currentFilter === g ? 'active' : ''}" onclick="this.getRootNode().host.changeFilter('${g}')">${g}</button>`
-    ).join('');
+    // 2. Rysujemy przyciski (Z NAPRAWIONYM CLICKIEM)
+    this.filtersContainer.innerHTML = ''; // Czyścimy, żeby nie dublować
 
-    // 4. Wyfiltruj i wyświetl karty
+    groups.forEach(g => {
+      const btn = document.createElement('button');
+      btn.innerText = g;
+      btn.className = `filter-btn ${this.currentFilter === g ? 'active' : ''}`;
+
+      // ZAMIAST onclick="..." UŻYWAMY addEventListener
+      // To rozwiązuje problem "changeFilter is not a function"
+      btn.addEventListener('click', () => {
+        this.currentFilter = g;
+        this.render(); // Przerysuj po kliknięciu
+      });
+
+      this.filtersContainer.appendChild(btn);
+    });
+
+    // 3. Filtrujemy i wyświetlamy karty
     const filtered = employees.filter(eid => {
       if (this.currentFilter === 'Wszyscy') return true;
       return hass.states[eid].attributes.group === this.currentFilter;
@@ -195,23 +236,38 @@ class EmployeeDashboard extends HTMLElement {
     }
   }
 
-  // Funkcja wywoływana po kliknięciu przycisku
-  changeFilter(group) {
-    this.currentFilter = group;
-    this.render();
-  }
-
   getCardSize() { return 3; }
 }
 
-// --- EDYTOR (Prosty) ---
+// --- EDYTOR ---
 class EmployeeCardEditor extends HTMLElement {
-  setConfig(c) { this.c = c; this.render(); }
-  render() { this.innerHTML = `<div>Opcje dostępne w kodzie YAML</div>`; }
+  setConfig(c) { this._config = c; this.render(); }
+  render() {
+    if (!this.innerHTML) {
+      this.innerHTML = `
+        <div class="card-config" style="padding:20px;">
+          <label style="font-weight:bold">Imię Pracownika</label>
+          <input type="text" id="name-input" style="width:100%; padding:8px; margin-top:5px;">
+        </div>`;
+      this.querySelector('#name-input').addEventListener('input', (e) =>
+        this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: { ...this._config, name: e.target.value } }, bubbles: true, composed: true }))
+      );
+    }
+    this.querySelector('#name-input').value = this._config.name || '';
+  }
 }
 
-customElements.define('employee-card-editor', EmployeeCardEditor);
-customElements.define('employee-dashboard', EmployeeDashboard);
+// --- REJESTRACJA Z ZABEZPIECZENIEM ---
+if (!customElements.get('employee-card-editor')) {
+  customElements.define('employee-card-editor', EmployeeCardEditor);
+}
+if (!customElements.get('employee-card')) {
+  customElements.define('employee-card', EmployeeCard);
+}
+if (!customElements.get('employee-dashboard')) {
+  customElements.define('employee-dashboard', EmployeeDashboard);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({ type: "employee-dashboard", name: "Panel Zespołu (Filtry)", preview: true, description: "Automatyczna lista z filtrowaniem grup" });
+window.customCards.push({ type: "employee-card", name: "Pracownik (Pojedynczy)", description: "Karta jednego pracownika" });
+window.customCards.push({ type: "employee-dashboard", name: "Panel Zespołu (AUTO)", preview: true, description: "Automatycznie wyświetla wszystkich pracowników" });
