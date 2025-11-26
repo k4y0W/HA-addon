@@ -39,12 +39,15 @@ BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
 GENERATED_SUFFIXES = ["_status", "_czas_pracy", "_temperatura", "_wilgotnosc", "_cisnienie", "_moc", "_napiecie", "_natezenie", "_pm25", "_bateria", "_jasnosc"]
 
 def load_employees():
-    if not os.path.exists(DATA_FILE): return []
-    try: with open(DATA_FILE, 'r') as f: return json.load(f)
+    if not os.path.exists(DATA_FILE): 
+        return []
+    try: 
+        with open(DATA_FILE, 'r') as f: return json.load(f)
     except: return []
 
 def save_employees(data):
-    with open(DATA_FILE, 'w') as f: json.dump(data, f, indent=4)
+    with open(DATA_FILE, 'w') as f: 
+        json.dump(data, f, indent=4)
 
 def get_clean_sensors():
     sensors = []
