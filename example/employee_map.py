@@ -19,7 +19,7 @@ SENSOR_TYPES = {
     },
     "pm25": {
         "label": "Jakość Powietrza (PM2.5)",
-        "unit": "μg/m³",
+        "unit": "μg/m3",
         "icon": "mdi:blur",
         "device_class": "pm25"
     },
