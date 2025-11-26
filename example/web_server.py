@@ -414,13 +414,16 @@ def export_csv():
     employees = load_employees()
     si = io.StringIO()
     cw = csv.writer(si, delimiter=';')
-    cw.writerow(["Data", "Imię", "Status", "Czas Pracy (min)", "Pomiary"])
+    cw.writerow(["Data", "Imie", "Status", "Czas Pracy (min)", "Pomiary"])
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
     for emp in employees:
         name = emp['name']
         safe = name.lower().replace(" ", "_")
         status = get_ha_state(f"sensor.{safe}_status")
         time = get_ha_state(f"sensor.{safe}_czas_pracy")
+        if time and '.' in time:
+            time = time.replace('.', ',')
+        power_sensor = "Brak"
         cw.writerow([today, name, status, time, len(emp.get('sensors',[]))])
     return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport_{datetime.now().strftime('%Y%m%d')}.csv"})
 
