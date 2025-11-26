@@ -9,6 +9,7 @@ from flask import Flask, request, jsonify, render_template_string, Response
 from employee_map import SENSOR_TYPES
 
 DATA_FILE = "/data/employees.json"
+GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN = ""
@@ -56,17 +57,17 @@ GENERATED_SUFFIXES = [
     "_pm25", "_bateria", "_jasnosc"
 ]
 
-def load_employees():
-    if not os.path.exists(DATA_FILE):
+def load_json(file_path):
+    if not os.path.exists(file_path):
         return []
     try:
-        with open(DATA_FILE, 'r') as f:
+        with open(file_path, 'r') as f:
             return json.load(f)
     except:
         return []
 
-def save_employees(data):
-    with open(DATA_FILE, 'w') as f:
+def save_json(file_path, data):
+    with open(file_path, 'w') as f:
         json.dump(data, f, indent=4)
 
 def get_clean_sensors():
@@ -132,32 +133,6 @@ def get_ha_state(entity_id):
         pass
     return "-"
 
-def register_lovelace_resource():
-    CARD_URL = "/local/employee-card.js"
-    token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
-    install_headers = {
-        "Authorization": f"Bearer {token_to_use}",
-        "Content-Type": "application/json",
-    }
-    try:
-        url = f"{API_URL}/lovelace/resources"
-        if USER_TOKEN: pass 
-
-        get_resp = requests.get(url, headers=install_headers)
-        if get_resp.status_code in [401, 403, 404]:
-            return False, "Brak uprawnień API."
-        
-        resources = get_resp.json()
-        for res in resources:
-            if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
-
-        payload = {"url": CARD_URL, "type": "module"}
-        post_resp = requests.post(url, headers=install_headers, json=payload)
-        
-        if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
-        else: return False, f"Błąd API: {post_resp.text}"
-    except Exception as e: return False, str(e)
-
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -177,6 +152,7 @@ HTML_PAGE = """
         .tile-val { font-size: 0.85rem; font-weight: 600; color: #0d6efd; margin-left: auto; }
         .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
         .bg-working { background-color: #28a745; } .bg-idle { background-color: #ffc107; } .bg-absent { background-color: #dc3545; }
+        .card { border:none; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.05); }
     </style>
 </head>
 <body>
@@ -186,8 +162,9 @@ HTML_PAGE = """
         <h3 class="fw-bold text-primary"><i class="mdi mdi-account-group"></i> Employee Manager</h3>
         <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
             <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
-            <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
-            <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj Kartę</button></li>
+            <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Pracownicy</button></li>
+            <li class="nav-item"><button class="nav-link" id="tab-groups" data-bs-toggle="pill" data-bs-target="#pills-groups">Grupy</button></li>
+            <li class="nav-item"><button class="nav-link text-success fw-bold" onclick="showInstallInfo()"><i class="mdi mdi-download"></i> Karta</button></li>
         </ul>
     </div>
 
@@ -210,21 +187,24 @@ HTML_PAGE = """
                                     <label class="form-label fw-bold">Imię i Nazwisko</label>
                                     <input type="text" class="form-control" id="empName" required placeholder="np. Jan Kowalski">
                                 </div>
-                                
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Grupa (Dział)</label>
+                                    <select class="form-select" id="empGroup">
+                                        <option value="Domyślna">Domyślna</option>
+                                    </select>
+                                </div>
                                 <div class="mb-3">
                                     <label class="form-label fw-bold d-flex justify-content-between">
                                         <span>Przypisz Czujniki</span>
                                         <span class="badge bg-light text-dark fw-normal border" id="count-badge">0 wybranych</span>
                                     </label>
                                     <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch" placeholder="🔍 Filtruj...">
-                                    
                                     <div class="sensor-list-container border rounded p-2 bg-light" style="max-height: 400px; overflow-y: auto;">
                                         <div id="sensorList" class="d-flex flex-column gap-2">
                                             <div class="text-center text-muted p-3">Ładowanie...</div>
                                         </div>
                                     </div>
                                 </div>
-
                                 <button type="submit" class="btn btn-primary w-100">Zapisz Pracownika</button>
                             </form>
                         </div>
@@ -234,11 +214,33 @@ HTML_PAGE = """
                     <div class="card shadow-sm">
                         <div class="card-header bg-white fw-bold">Lista Pracowników</div>
                         <div class="card-body p-0">
-                            <table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr><th>Imię</th><th>Liczba</th><th></th></tr></thead><tbody id="configTable"></tbody></table>
+                            <table class="table table-hover mb-0 align-middle"><tbody id="configTable"></tbody></table>
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
+        
+        <div class="tab-pane fade" id="pills-groups">
+             <div class="row">
+                <div class="col-md-5">
+                    <div class="card p-3">
+                        <h5 class="fw-bold">Stwórz Grupę</h5>
+                        <form id="groupForm">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="newGroup" placeholder="np. IT" required>
+                                <button class="btn btn-success">Dodaj</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                <div class="col-md-7">
+                    <div class="card p-3">
+                        <h5 class="fw-bold">Istniejące Grupy</h5>
+                        <ul class="list-group" id="groupList"></ul>
+                    </div>
+                </div>
+             </div>
         </div>
     </div>
 </div>
@@ -274,10 +276,7 @@ HTML_PAGE = """
     const countBadge = document.getElementById('count-badge');
     const installModal = new bootstrap.Modal(document.getElementById('installModal'));
 
-    function updateCount() { 
-        const count = document.querySelectorAll('#sensorList input:checked').length;
-        countBadge.innerText = count + " wybranych";
-    }
+    function showInstallInfo() { installModal.show(); }
 
     function copyLink() {
         const copyText = document.getElementById("linkInput");
@@ -300,22 +299,9 @@ HTML_PAGE = """
         } catch (err) {}
     }
 
-    async function installCard() {
-        const btn = document.getElementById('tab-install');
-        const originalText = btn.innerHTML;
-        btn.innerHTML = '⏳ ...';
-        try {
-            const res = await fetch('api/install_card', { method: 'POST' });
-            const data = await res.json();
-            if(data.success) {
-                alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
-            } else {
-                installModal.show();
-            }
-        } catch (e) { 
-            installModal.show();
-        }
-        btn.innerHTML = originalText;
+    function updateCount() { 
+        const count = document.querySelectorAll('#sensorList input:checked').length;
+        countBadge.innerText = count + " wybranych";
     }
 
     function renderSensorList(filterText = "") {
@@ -366,12 +352,20 @@ HTML_PAGE = """
             const grid = document.getElementById('dashboard-grid');
             if(data.length === 0) { grid.innerHTML = '<p class="text-center mt-5">Brak danych.</p>'; return; }
             grid.innerHTML = data.map(emp => `
-                <div class="col-md-6 col-xl-4"><div class="card h-100"><div class="card-body">
-                    <div class="d-flex align-items-center mb-3"><div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
-                    <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small></div>
-                    <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div></div>
-                    <div class="row g-2">${emp.measurements.map(m => `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`).join('')}</div>
-                </div></div></div>`).join('');
+                <div class="col-md-6 col-xl-4">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center mb-3">
+                                <div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
+                                <div><h5 class="mb-0 fw-bold">${emp.name}</h5><small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small></div>
+                                <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div>
+                            </div>
+                            <div class="row g-2">${emp.measurements.map(m => 
+                                `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`
+                            ).join('')}</div>
+                        </div>
+                    </div>
+                </div>`).join('');
         } catch(e){}
     }
 
@@ -379,24 +373,40 @@ HTML_PAGE = """
         const res = await fetch('api/employees');
         const data = await res.json();
         document.getElementById('configTable').innerHTML = data.map((emp, i) => `
-            <tr><td><strong>${emp.name}</strong></td><td><span class="badge bg-secondary">${emp.sensors ? emp.sensors.length : 0}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
+            <tr><td><strong>${emp.name}</strong><br><span class="badge bg-secondary">${emp.group || 'Domyślna'}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
         `).join('');
+    }
+
+    async function loadGroups() {
+        const res = await fetch('api/groups');
+        const groups = await res.json();
+        document.getElementById('groupList').innerHTML = groups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
+        const sel = document.getElementById('empGroup');
+        sel.innerHTML = groups.map(g => `<option value="${g}">${g}</option>`).join('');
     }
 
     document.getElementById('addForm').onsubmit = async (e) => {
         e.preventDefault();
         const name = document.getElementById('empName').value;
+        const grp = document.getElementById('empGroup').value;
         const selected = [];
         document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
         if(selected.length === 0) return alert("Wybierz czujnik!");
-        await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, sensors: selected}) });
+        await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: grp, sensors: selected}) });
         document.getElementById('empName').value = '';
         renderSensorList(); loadConfig(); refreshMonitor(); alert('Zapisano!');
     };
 
-    window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitor(); } }
+    document.getElementById('groupForm').onsubmit = async (e) => {
+        e.preventDefault();
+        await fetch('api/groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: document.getElementById('newGroup').value}) });
+        document.getElementById('newGroup').value=''; loadGroups();
+    };
 
-    renderSensorList(); loadConfig(); refreshMonitor(); setInterval(refreshMonitor, 3000);
+    window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitor(); } }
+    window.delGroup = async (n) => { if(confirm("Usunąć grupę?")) { await fetch('api/groups/'+n, {method:'DELETE'}); loadGroups(); }};
+
+    renderSensorList(); loadConfig(); loadGroups(); refreshMonitor(); setInterval(refreshMonitor, 3000);
 </script>
 </body>
 </html>
@@ -406,46 +416,45 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
-@app.route('/api/export_csv')
-def export_csv():
-    import csv
-    import io
-    from datetime import datetime
-    employees = load_employees()
-    si = io.StringIO()
-    cw = csv.writer(si, delimiter=';')
-    cw.writerow(["Data", "Imie", "Status", "Czas Pracy (min)", "Pomiary"])
-    today = datetime.now().strftime("%Y-%m-%d %H:%M")
-    for emp in employees:
-        name = emp['name']
-        safe = name.lower().replace(" ", "_")
-        status = get_ha_state(f"sensor.{safe}_status")
-        time = get_ha_state(f"sensor.{safe}_czas_pracy")
-        if time and '.' in time:
-            time = time.replace('.', ',')
-        power_sensor = "Brak"
-        cw.writerow([today, name, status, time, len(emp.get('sensors',[]))])
-    return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport_{datetime.now().strftime('%Y%m%d')}.csv"})
+@app.route('/api/groups', methods=['GET', 'POST'])
+def handle_groups():
+    grps = load_json(GROUPS_FILE)
+    if not grps: grps = ["Domyślna"]
+    if request.method == 'POST':
+        name = request.json.get('name')
+        if name and name not in grps: grps.append(name)
+        save_json(GROUPS_FILE, grps)
+    return jsonify(grps)
+
+@app.route('/api/groups/<name>', methods=['DELETE'])
+def del_group(name):
+    grps = load_json(GROUPS_FILE)
+    if name in grps: grps.remove(name)
+    save_json(GROUPS_FILE, grps)
+    return jsonify({"status":"ok"})
 
 @app.route('/api/employees', methods=['GET'])
-def api_get(): return jsonify(load_employees())
+def api_get(): return jsonify(load_json(DATA_FILE))
+
 @app.route('/api/employees', methods=['POST'])
 def api_post():
     data = request.json
-    emps = load_employees()
+    emps = load_json(DATA_FILE)
     emps = [e for e in emps if e['name'] != data['name']]
     emps.append(data)
-    save_employees(emps)
+    save_json(DATA_FILE, emps)
     return jsonify({"status":"ok"})
+
 @app.route('/api/employees/<int:i>', methods=['DELETE'])
 def api_del(i):
-    emps = load_employees()
+    emps = load_json(DATA_FILE)
     if 0 <= i < len(emps): del emps[i]
-    save_employees(emps)
+    save_json(DATA_FILE, emps)
     return jsonify({"status":"ok"})
+
 @app.route('/api/monitor', methods=['GET'])
 def api_monitor():
-    emps = load_employees()
+    emps = load_json(DATA_FILE)
     res = []
     for emp in emps:
         safe = emp['name'].lower().replace(" ","_")
@@ -471,7 +480,19 @@ def api_monitor():
             except: pass
         res.append({"name": emp['name'], "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
-@app.route('/api/install_card', methods=['POST'])
-def api_install_card():
-    success, msg = register_lovelace_resource()
-    return jsonify({"success": success, "message": msg})
+
+@app.route('/api/export_csv')
+def export_csv():
+    import csv, io
+    from datetime import datetime
+    emps = load_json(DATA_FILE)
+    si = io.StringIO(); cw = csv.writer(si, delimiter=';')
+    cw.writerow(["Data", "Imie", "Grupa", "Status", "Czas (min)"])
+    today = datetime.now().strftime("%Y-%m-%d %H:%M")
+    for e in emps:
+        safe = e['name'].lower().replace(" ", "_")
+        status = get_ha_state(f"sensor.{safe}_status")
+        time = get_ha_state(f"sensor.{safe}_czas_pracy")
+        if time and '.' in time: time = time.replace('.', ',')
+        cw.writerow([today, e['name'], e.get('group', ''), status, time])
+    return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport.csv"})

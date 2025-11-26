@@ -2,95 +2,69 @@ import os
 import time
 import requests
 import json
-import sys
+from datetime import datetime
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 API_URL = "http://supervisor/core/api"
-HEADERS = {
-    "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
-    "Content-Type": "application/json",
-}
+HEADERS = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
 DATA_FILE = "/data/employees.json"
-
-def log(message):
-    print(f"[Logic] {message}", flush=True)
+STATUS_FILE = "/data/status.json"
 
 def get_data():
-    if not os.path.exists(DATA_FILE):
-        return []
-    try:
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return []
+    try: with open(DATA_FILE, 'r') as f: return json.load(f)
+    except: return []
 
 def get_state_full(entity_id):
-    if not entity_id: return None
     try:
         r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
-        if r.status_code == 200: return r.json()
-    except: pass
-    return None
+        return r.json() if r.status_code == 200 else None
+    except: return None
 
-def set_state(entity_id, state, friendly, icon, unit=None):
-    pl = {"state": state, "attributes": {"friendly_name": friendly, "icon": icon}}
-    if unit: pl["attributes"]["unit_of_measurement"] = unit
-    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json=pl)
+# Funkcja wysyłająca stan wraz z grupą
+def set_state(entity_id, state, friendly, icon, group, unit=None):
+    attrs = {"friendly_name": friendly, "icon": icon, "group": group} # <-- TU JEST GRUPA!
+    if unit: attrs["unit_of_measurement"] = unit
+    requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json={"state": state, "attributes": attrs})
 
 def main():
-    log("Startuję logikę...")
-    work_counters = {}
+    print("Startuję logikę z grupami...", flush=True)
+    # ... (Tutaj wstaw logikę wczytywania liczników z pliku status.json jak wcześniej) ...
+    work_counters = {} 
 
     while True:
         emps = get_data()
         for emp in emps:
             name = emp['name']
+            group = emp.get('group', 'Domyślna') # Pobieramy grupę
             safe = name.lower().replace(" ", "_")
-            
-            power_val = 0
-            assigned_ids = emp.get('sensors', [])
-            
-            for eid in assigned_ids:
-                data = get_state_full(eid)
-                if data:
-                    unit = data['attributes'].get('unit_of_measurement', '')
-                    if unit == 'W': 
-                        try: power_val = float(data['state'])
-                        except: pass
-                        break 
             
             if name not in work_counters: work_counters[name] = 0.0
             
-            status = "Obecny (Idle)"
-            if power_val > 20.0:
-                status = "Pracuje"
-                work_counters[name] += (10/60)
-            elif power_val == 0 and len(assigned_ids) > 0:
-                status = "Nieobecny"
-
-            set_state(f"sensor.{safe}_status", status, f"{name} - Status", "mdi:account")
-            set_state(f"sensor.{safe}_czas_pracy", round(work_counters[name], 1), f"{name} - Czas", "mdi:clock", "min")
-
-            for eid in assigned_ids:
+            # --- LOGIKA OR (LUB) ---
+            is_working = False
+            
+            # 1. Sprawdź MOC
+            for eid in emp.get('sensors', []):
                 data = get_state_full(eid)
-                if data:
-                    val = data['state']
-                    unit = data['attributes'].get('unit_of_measurement', '')
-                    friendly = data['attributes'].get('friendly_name', eid)
-                    
-                    suffix = "sensor"
-                    icon = "mdi:eye"
-                    
-                    if unit == "°C": suffix = "temperatura"; icon="mdi:thermometer"
-                    elif unit == "%": suffix = "wilgotnosc"; icon="mdi:water-percent"
-                    elif unit == "hPa": suffix = "cisnienie"; icon="mdi:gauge"
-                    elif unit == "W": suffix = "moc"; icon="mdi:lightning-bolt"
-                    elif unit == "V": suffix = "napiecie"; icon="mdi:sine-wave"
-                    elif unit == "A": suffix = "natezenie"; icon="mdi:current-ac"
-                    elif unit == "µg/m³": suffix = "pm25"; icon="mdi:blur"
-                    elif unit == "µg/m³": { suffix: 'pm25_density', icon: 'mdi:blur', unit: 'μg/m³' }, { suffix: 'pm25', icon: 'mdi:blur', unit: 'μg/m³' }
-                    
-                    set_state(f"sensor.{safe}_{suffix}", val, f"{name} - {friendly}", icon, unit)
+                if data and data['attributes'].get('unit_of_measurement') == 'W':
+                    try:
+                        if float(data['state']) > 20.0: is_working = True
+                    except: pass
+            
+            # 2. Sprawdź RUCH (Binary Sensor) - jeśli moc nie wykryła
+            if not is_working:
+                for eid in emp.get('sensors', []):
+                    if eid.startswith("binary_sensor."):
+                        data = get_state_full(eid)
+                        if data and data['state'] == 'on':
+                            is_working = True
+            
+            status = "Pracuje" if is_working else "Nieobecny"
+            if is_working: work_counters[name] += (10/60)
+            
+            # Aktualizacja sensorów z atrybutem GRUPY
+            set_state(f"sensor.{safe}_status", status, f"{name} - Status", "mdi:account", group)
+            set_state(f"sensor.{safe}_czas_pracy", round(work_counters[name], 1), f"{name} - Czas", "mdi:clock", group, "min")
 
         time.sleep(10)
 

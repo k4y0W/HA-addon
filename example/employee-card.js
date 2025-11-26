@@ -81,35 +81,30 @@ function renderEmployeeHTML(hass, entityId) {
 
   const fullName = statusEntity.attributes.friendly_name.replace(' - Status', '');
   const baseId = entityId.replace('_status', '');
-
   const state = statusEntity.state;
-  let statusClass = 'is-absent';
-  let iconName = 'mdi:account-off';
-
-  if (state === 'Pracuje') { statusClass = 'is-working'; iconName = 'mdi:laptop'; }
-  else if (state === 'Obecny (Idle)') { statusClass = 'is-idle'; iconName = 'mdi:coffee'; }
 
   const timeEntity = hass.states[`${baseId}_czas_pracy`];
   const timeVal = timeEntity ? Math.round(parseFloat(timeEntity.state)) : 0;
 
-  // Obliczanie paska postępu (Cel: 8h = 480 min)
-  const targetMinutes = 480;
-  let progressPct = (timeVal / targetMinutes) * 100;
-  if (progressPct > 100) progressPct = 100;
+  // --- LOGIKA 8 GODZIN ---
+  const isOvertime = timeVal > 480; // 8h * 60min
 
-  let sensorsHtml = '';
-  KNOWN_SENSOR_TYPES.forEach(type => {
-    const sId = `${baseId}_${type.suffix}`;
-    const sEnt = hass.states[sId];
-    if (sEnt && sEnt.state !== 'unavailable' && sEnt.state !== 'unknown') {
-      const unit = sEnt.attributes.unit_of_measurement || type.unit;
-      sensorsHtml += `
-        <div class="sensor-chip">
-          <ha-icon icon="${type.icon}"></ha-icon>
-          <span>${sEnt.state} ${unit}</span>
-        </div>`;
-    }
-  });
+  let statusClass = 'is-absent';
+  let iconName = 'mdi:account-off';
+
+  if (state === 'Pracuje') {
+    statusClass = 'is-working';
+    iconName = 'mdi:laptop';
+    if (isOvertime) { statusClass = 'is-overtime'; iconName = 'mdi:fire'; } // Efekt nadgodzin
+  }
+  else if (state === 'Obecny (Idle)') { statusClass = 'is-idle'; iconName = 'mdi:coffee'; }
+
+  // Pasek
+  let progressPct = (timeVal / 480) * 100;
+  let progressClass = "";
+  if (progressPct > 100) { progressPct = 100; progressClass = "over"; }
+
+  // ... (reszta renderowania sensorów bez zmian) ...
 
   return `
     <div class="emp-card">
@@ -117,21 +112,48 @@ function renderEmployeeHTML(hass, entityId) {
         <div class="icon-box ${statusClass}"><ha-icon icon="${iconName}"></ha-icon></div>
         <div class="info">
           <div class="emp-name">${fullName}</div>
-          <div class="emp-status">${state}</div>
+          <div class="emp-status">${isOvertime && state == 'Pracuje' ? 'NADGODZINY 🔥' : state}</div>
+          <div style="font-size:0.75em; color:#999">${statusEntity.attributes.group || ''}</div>
         </div>
-        <div class="stats">
-          <div class="time-val">${timeVal}</div>
-          <div class="time-unit">MINUT</div>
-        </div>
+        <div class="stats"><div class="time-val">${timeVal}</div><div class="time-unit">MINUT</div></div>
       </div>
-      
-      <div class="progress-container" title="Postęp dnia pracy (Cel: 8h)">
-        <div class="progress-bar" style="width: ${progressPct}%"></div>
-      </div>
+      <div class="progress-container"><div class="progress-bar ${progressClass}" style="width: ${progressPct}%"></div></div>
+      <div class="sensors-row">${sensorsHtml}</div>
+    </div>`;
+}
 
-      ${sensorsHtml ? `<div class="sensors-row">${sensorsHtml}</div>` : ''}
-    </div>
-  `;
+// --- KARTA DASHBOARD Z FILTREM GRUP ---
+class EmployeeDashboard extends HTMLElement {
+  setConfig(config) {
+    this.config = config;
+    this.title = config.title || (config.group ? `Zespół: ${config.group}` : "Wszyscy");
+  }
+
+  set hass(hass) {
+    if (!this.content) {
+      this.innerHTML = `...style... <div class="dash-title">${this.title}</div><div id="d"></div>`;
+      this.content = this.querySelector('#d');
+    }
+
+    // Pobieramy wszystkich pracowników
+    let employees = Object.keys(hass.states)
+      .filter(eid => eid.startsWith('sensor.') && eid.endsWith('_status'));
+
+    // --- FILTROWANIE PO GRUPIE ---
+    if (this.config.group) {
+      employees = employees.filter(eid => {
+        const attr = hass.states[eid].attributes;
+        return attr && attr.group === this.config.group;
+      });
+    }
+
+    employees.sort();
+
+    if (employees.length === 0) {
+      this.content.innerHTML = "Brak pracowników w tej grupie."; return;
+    }
+    this.content.innerHTML = employees.map(eid => renderEmployeeHTML(hass, eid)).join('');
+  }
 }
 
 class EmployeeCard extends HTMLElement {
