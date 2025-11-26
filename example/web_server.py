@@ -8,8 +8,6 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, Response
 from employee_map import SENSOR_TYPES
 
-app = Flask(__name__)
-
 DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
@@ -20,8 +18,7 @@ try:
     with open(OPTIONS_FILE, 'r') as f:
         opts = json.load(f)
         USER_TOKEN = opts.get("ha_token", "")
-except:
-    pass
+except: pass
 
 API_URL = "http://supervisor/core/api"
 HEADERS = {
@@ -29,33 +26,17 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+app = Flask(__name__)
+
 PRETTY_NAMES = {
-    "temperature": "Temperatura",
-    "humidity": "Wilgotność",
-    "pressure": "Ciśnienie",
-    "power": "Moc",
-    "energy": "Energia",
-    "voltage": "Napięcie",
-    "current": "Natężenie",
-    "battery": "Bateria",
-    "signal_strength": "Sygnał",
-    "pm25": "PM 2.5",
-    "illuminance": "Jasność",
+    "temperature": "Temperatura", "humidity": "Wilgotność", "pressure": "Ciśnienie",
+    "power": "Moc", "energy": "Energia", "voltage": "Napięcie", "current": "Natężenie",
+    "battery": "Bateria", "signal_strength": "Sygnał", "pm25": "PM 2.5", "illuminance": "Jasność",
     "connectivity": "Połączenie"
 }
-
-BLOCKED_PREFIXES = [
-    "sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", 
-    "sensor.zone", "sensor.automation", "sensor.script", 
-    "update.", "person.", "zone.", "sun.", "todo."
-]
+BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo."]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
-GENERATED_SUFFIXES = [
-    "_status", "_czas_pracy", 
-    "_temperatura", "_wilgotnosc", "_cisnienie", 
-    "_moc", "_napiecie", "_natezenie", 
-    "_pm25", "_bateria", "_jasnosc"
-]
+GENERATED_SUFFIXES = ["_status", "_czas_pracy", "_temperatura", "_wilgotnosc", "_cisnienie", "_moc", "_napiecie", "_natezenie", "_pm25", "_bateria", "_jasnosc"]
 
 def load_json(file_path):
     if not os.path.exists(file_path):
@@ -65,14 +46,11 @@ def load_json(file_path):
             return default_groups
         return []
     try:
-        with open(file_path, 'r') as f:
-            return json.load(f)
-    except:
-        return []
+        with open(file_path, 'r') as f: return json.load(f)
+    except: return []
 
 def save_json(file_path, data):
-    with open(file_path, 'w') as f:
-        json.dump(data, f, indent=4)
+    with open(file_path, 'w') as f: json.dump(data, f, indent=4)
 
 def get_clean_sensors():
     sensors = []
@@ -90,20 +68,15 @@ def get_clean_sensors():
                 
                 is_virtual = False
                 for suffix in GENERATED_SUFFIXES:
-                    if eid.endswith(suffix):
-                        is_virtual = True
-                        break
+                    if eid.endswith(suffix): is_virtual = True; break
                 if is_virtual: continue
-
                 if " - " in friendly_name: continue
-
                 if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
                 if "scene_history" in eid or "message" in eid: continue
 
                 unit = attrs.get("unit_of_measurement", "")
                 main_label = friendly_name 
-                
                 if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
@@ -111,17 +84,9 @@ def get_clean_sensors():
                 elif unit == "hPa": main_label = "Ciśnienie"
                 elif unit == "%": main_label = "Wilgotność"
                 
-                sensors.append({
-                    "id": eid,
-                    "main_label": main_label,
-                    "sub_label": friendly_name,
-                    "unit": unit,
-                    "state": entity.get("state", "-"),
-                    "device_class": device_class
-                })
+                sensors.append({"id": eid, "main_label": main_label, "sub_label": friendly_name, "unit": unit, "state": entity.get("state", "-"), "device_class": device_class})
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
-    except:
-        pass
+    except: pass
     return sensors
 
 def get_ha_state(entity_id):
@@ -129,34 +94,24 @@ def get_ha_state(entity_id):
         resp = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
         if resp.status_code == 200:
             state = resp.json().get("state")
-            try:
-                return str(round(float(state), 1))
-            except:
-                return state
-    except:
-        pass
+            try: return str(round(float(state), 1))
+            except: return state
+    except: pass
     return "-"
 
 def register_lovelace_resource():
     CARD_URL = "/local/employee-card.js"
     token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
-    install_headers = {
-        "Authorization": f"Bearer {token_to_use}",
-        "Content-Type": "application/json",
-    }
+    install_headers = {"Authorization": f"Bearer {token_to_use}", "Content-Type": "application/json"}
     try:
         url = f"{API_URL}/lovelace/resources"
         get_resp = requests.get(url, headers=install_headers)
-        if get_resp.status_code in [401, 403, 404]:
-            return False, "Brak uprawnień API."
-        
+        if get_resp.status_code in [401, 403, 404]: return False, "Brak uprawnień API."
         resources = get_resp.json()
         for res in resources:
             if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
-
         payload = {"url": CARD_URL, "type": "module"}
         post_resp = requests.post(url, headers=install_headers, json=payload)
-        
         if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
         else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
@@ -181,7 +136,8 @@ HTML_PAGE = """
         .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
         .bg-working { background-color: #28a745; } .bg-idle { background-color: #ffc107; } .bg-absent { background-color: #dc3545; }
         .group-filters { overflow-x: auto; white-space: nowrap; padding-bottom: 10px; }
-        .group-btn { border-radius: 20px; padding: 5px 15px; border: 1px solid #dee2e6; background: white; margin-right: 5px; color: #555; transition:0.2s; }
+        .group-btn { border-radius: 20px; padding: 5px 15px; border: 1px solid #dee2e6; background: white; margin-right: 5px; color: #555; transition:0.2s; cursor: pointer; }
+        .group-btn:hover { background: #e9ecef; }
         .group-btn.active { background: #0d6efd; color: white; border-color: #0d6efd; }
     </style>
 </head>
@@ -192,8 +148,7 @@ HTML_PAGE = """
         <h3 class="fw-bold text-primary"><i class="mdi mdi-account-group"></i> Employee Manager</h3>
         <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
             <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
-            <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Pracownicy</button></li>
-            <li class="nav-item"><button class="nav-link" id="tab-groups" data-bs-toggle="pill" data-bs-target="#pills-groups">Grupy</button></li>
+            <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
             <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj Kartę</button></li>
         </ul>
     </div>
@@ -250,56 +205,28 @@ HTML_PAGE = """
                             <table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr><th>Imię</th><th>Liczba</th><th></th></tr></thead><tbody id="configTable"></tbody></table>
                         </div>
                     </div>
+                    
+                    <div class="card shadow-sm mt-3">
+                        <div class="card-header bg-white fw-bold">Grupy</div>
+                        <div class="card-body">
+                            <form id="groupForm" class="mb-3">
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="newGroup" placeholder="Nowa grupa..." required>
+                                    <button class="btn btn-success">Dodaj</button>
+                                </div>
+                            </form>
+                            <ul class="list-group" id="groupList"></ul>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-        
-        <div class="tab-pane fade" id="pills-groups">
-             <div class="row">
-                <div class="col-md-5">
-                    <div class="card p-3 shadow-sm">
-                        <h5 class="fw-bold">Stwórz Grupę</h5>
-                        <form id="groupForm">
-                            <div class="input-group">
-                                <input type="text" class="form-control" id="newGroup" placeholder="np. IT" required>
-                                <button class="btn btn-success">Dodaj</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-                <div class="col-md-7">
-                    <div class="card p-3 shadow-sm">
-                        <h5 class="fw-bold">Istniejące Grupy</h5>
-                        <ul class="list-group" id="groupList"></ul>
-                    </div>
-                </div>
-             </div>
         </div>
     </div>
 </div>
 
 <div class="modal fade" id="installModal" tabindex="-1">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      <div class="modal-header bg-light">
-        <h5 class="modal-title">Instalacja Karty Lovelace</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <p>Aby użyć karty na pulpicie:</p>
-        <ol>
-            <li>Skopiuj link poniżej.</li>
-            <li>Otwórz ustawienia zasobów.</li>
-            <li>Wklej link i wybierz <b>Moduł JavaScript</b>.</li>
-        </ol>
-        <div class="input-group mb-3">
-            <input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput" readonly>
-            <button class="btn btn-outline-primary" id="btn-copy" onclick="copyLink()">Kopiuj</button>
-        </div>
-        <a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100">Otwórz Ustawienia</a>
-      </div>
-    </div>
-  </div>
+  <div class="modal-dialog"><div class="modal-content"><div class="modal-header bg-light"><h5 class="modal-title">Instalacja Karty Lovelace</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body"><p>Skopiuj link i dodaj w zasobach:</p><div class="input-group mb-3"><input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput" readonly><button class="btn btn-outline-primary" id="btn-copy" onclick="copyLink()">Kopiuj</button></div><a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100">Otwórz Ustawienia</a></div></div></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -308,8 +235,10 @@ HTML_PAGE = """
     const chkContainer = document.getElementById('sensorList');
     const countBadge = document.getElementById('count-badge');
     const installModal = new bootstrap.Modal(document.getElementById('installModal'));
+    
     let currentFilter = 'Wszyscy';
     let allEmployeesData = [];
+    let currentGroups = []; // Przechowujemy grupy globalnie
 
     function updateCount() { 
         const count = document.querySelectorAll('#sensorList input:checked').length;
@@ -322,11 +251,7 @@ HTML_PAGE = """
         copyText.select();
         copyText.setSelectionRange(0, 99999);
         try {
-            if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(copyText.value);
-            } else {
-                document.execCommand('copy');
-            }
+            document.execCommand('copy'); 
             const originalHtml = btn.innerHTML;
             btn.innerHTML = 'Skopiowano!';
             btn.classList.replace('btn-outline-primary', 'btn-success');
@@ -339,19 +264,13 @@ HTML_PAGE = """
 
     async function installCard() {
         const btn = document.getElementById('tab-install');
-        const originalText = btn.innerHTML;
-        btn.innerHTML = '⏳ ...';
+        const originalText = btn.innerHTML; btn.innerHTML = '⏳ ...';
         try {
             const res = await fetch('api/install_card', { method: 'POST' });
             const data = await res.json();
-            if(data.success) {
-                alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
-            } else {
-                installModal.show();
-            }
-        } catch (e) { 
-            installModal.show();
-        }
+            if(data.success) alert("SUKCES! " + data.message + "\\n\\nOdśwież stronę (Ctrl+F5)!");
+            else installModal.show();
+        } catch (e) { installModal.show(); }
         btn.innerHTML = originalText;
     }
 
@@ -395,31 +314,54 @@ HTML_PAGE = """
 
     document.getElementById('sensorSearch').addEventListener('input', (e) => renderSensorList(e.target.value));
 
+    // --- GRUPY ---
     async function loadGroups() {
         const res = await fetch('api/groups');
-        const groups = await res.json();
-        document.getElementById('groupList').innerHTML = groups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
-        document.getElementById('empGroup').innerHTML = groups.map(g => `<option value="${g}">${g}</option>`).join('');
+        currentGroups = await res.json();
         
+        // Lista w ustawieniach
+        document.getElementById('groupList').innerHTML = currentGroups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
+        
+        // Select w formularzu
+        document.getElementById('empGroup').innerHTML = currentGroups.map(g => `<option value="${g}">${g}</option>`).join('');
+        
+        // Odświeżamy pasek filtrów
+        renderFilterBar();
+    }
+
+    function renderFilterBar() {
         const filters = document.getElementById('monitorFilters');
         let html = `<button class="group-btn ${currentFilter==='Wszyscy'?'active':''}" onclick="filterMonitor('Wszyscy')">Wszyscy</button>`;
-        groups.forEach(g => {
+        currentGroups.forEach(g => {
             if(g !== 'Domyślna') html += `<button class="group-btn ${currentFilter===g?'active':''}" onclick="filterMonitor('${g}')">${g}</button>`;
         });
         filters.innerHTML = html;
     }
+    
+    document.getElementById('groupForm').onsubmit = async (e) => {
+        e.preventDefault();
+        await fetch('api/groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: document.getElementById('newGroup').value}) });
+        document.getElementById('newGroup').value=''; loadGroups();
+    };
+    
+    window.delGroup = async (n) => { 
+        if(n === 'Domyślna') return alert("Nie można usunąć grupy Domyślna!");
+        if(confirm("Usunąć grupę?")) { await fetch('api/groups/'+n, {method:'DELETE'}); loadGroups(); loadConfig(); refreshMonitorData(); }
+    };
 
+    // --- MONITOR ---
     function filterMonitor(group) {
         currentFilter = group;
-        loadGroups();
-        renderGrid();
+        renderFilterBar(); // Odśwież wygląd przycisków
+        renderGrid(); // Przerysuj listę
     }
 
     function renderGrid() {
         const grid = document.getElementById('dashboard-grid');
+        // Filtrowanie danych
         const filtered = currentFilter === 'Wszyscy' ? allEmployeesData : allEmployeesData.filter(e => e.group === currentFilter);
         
-        if(filtered.length === 0) { grid.innerHTML = '<p class="text-center mt-5">Brak pracowników w tej grupie.</p>'; return; }
+        if(filtered.length === 0) { grid.innerHTML = '<p class="text-center mt-5 text-muted">Brak pracowników w tej grupie.</p>'; return; }
         
         grid.innerHTML = filtered.map(emp => `
             <div class="col-md-6 col-xl-4">
@@ -469,16 +411,9 @@ HTML_PAGE = """
         renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
     };
 
-    document.getElementById('groupForm').onsubmit = async (e) => {
-        e.preventDefault();
-        await fetch('api/groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: document.getElementById('newGroup').value}) });
-        document.getElementById('newGroup').value=''; loadGroups();
-    };
-
     window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitorData(); } }
-    window.delGroup = async (n) => { if(confirm("Usunąć?")) { await fetch('api/groups/'+n, { method: 'DELETE' }); loadGroups(); loadConfig(); } }
 
-    renderSensorList(); loadConfig(); loadGroups(); refreshMonitorData(); setInterval(refreshMonitorData, 3000);
+    renderSensorList(); loadGroups(); loadConfig(); refreshMonitorData(); setInterval(refreshMonitorData, 3000);
 </script>
 </body>
 </html>
@@ -486,27 +421,9 @@ HTML_PAGE = """
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors(), groups=load_json(GROUPS_FILE))
+    return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
-@app.route('/api/employees', methods=['GET'])
-def api_get(): return jsonify(load_json(DATA_FILE))
-
-@app.route('/api/employees', methods=['POST'])
-def api_post():
-    data = request.json
-    emps = load_json(DATA_FILE)
-    emps = [e for e in emps if e['name'] != data['name']]
-    emps.append(data)
-    save_json(DATA_FILE, emps)
-    return jsonify({"status":"ok"})
-
-@app.route('/api/employees/<int:i>', methods=['DELETE'])
-def api_del(i):
-    emps = load_json(DATA_FILE)
-    if 0 <= i < len(emps): del emps[i]
-    save_json(DATA_FILE, emps)
-    return jsonify({"status":"ok"})
-
+# --- API ---
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
     grps = load_json(GROUPS_FILE)
@@ -523,13 +440,28 @@ def del_group(name):
     grps = load_json(GROUPS_FILE)
     if name in grps: grps.remove(name)
     save_json(GROUPS_FILE, grps)
-    # Przenieś do domyślnej
     emps = load_json(DATA_FILE)
     for e in emps:
         if e.get('group') == name: e['group'] = "Domyślna"
     save_json(DATA_FILE, emps)
     return jsonify({"status":"ok"})
 
+@app.route('/api/employees', methods=['GET'])
+def api_get(): return jsonify(load_json(DATA_FILE))
+@app.route('/api/employees', methods=['POST'])
+def api_post():
+    data = request.json
+    emps = load_json(DATA_FILE)
+    emps = [e for e in emps if e['name'] != data['name']]
+    emps.append(data)
+    save_json(DATA_FILE, emps)
+    return jsonify({"status":"ok"})
+@app.route('/api/employees/<int:i>', methods=['DELETE'])
+def api_del(i):
+    emps = load_json(DATA_FILE)
+    if 0 <= i < len(emps): del emps[i]
+    save_json(DATA_FILE, emps)
+    return jsonify({"status":"ok"})
 @app.route('/api/monitor', methods=['GET'])
 def api_monitor():
     emps = load_json(DATA_FILE)
@@ -551,14 +483,10 @@ def api_monitor():
                 label = friendly_name
                 if dc in PRETTY_NAMES: label = PRETTY_NAMES[dc]
                 elif unit == "W": label = "Moc"
-                elif unit == "V": label = "Napięcie"
-                elif unit == "hPa": label = "Ciśnienie"
-                elif unit == "%": label = "Wilgotność"
                 meas.append({"label": label, "value": val, "unit": unit})
             except: pass
         res.append({"name": emp['name'], "group": emp.get('group', 'Domyślna'), "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
-
 @app.route('/api/export_csv')
 def export_csv():
     import csv, io
@@ -574,7 +502,6 @@ def export_csv():
         if time and '.' in time: time = time.replace('.', ',')
         cw.writerow([today, e['name'], e.get('group', ''), status, time])
     return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport.csv"})
-
 @app.route('/api/install_card', methods=['POST'])
 def api_install_card():
     success, msg = register_lovelace_resource()
