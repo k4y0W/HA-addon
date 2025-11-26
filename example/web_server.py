@@ -55,12 +55,7 @@ GENERATED_SUFFIXES = [
     "_moc", "_napiecie", "_natezenie", 
     "_pm25", "_bateria", "_jasnosc"
 ]
-CARDS_TO_INSTALL = [
-    "/local/employee-card.js",
-    "/local/community_cards/auto-entities.js",
-    "/local/community_cards/apexcharts-card.js",
-    "/local/community_cards/template-entity-row.js"
-]
+
 def load_employees():
     if not os.path.exists(DATA_FILE):
         return []
@@ -138,40 +133,29 @@ def get_ha_state(entity_id):
     return "-"
 
 def register_lovelace_resource():
+    CARD_URL = "/local/employee-card.js"
     token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
     install_headers = {
         "Authorization": f"Bearer {token_to_use}",
         "Content-Type": "application/json",
     }
-    
-    log_messages = []
-    success_count = 0
-
     try:
-        get_resp = requests.get(f"{API_URL}/lovelace/resources", headers=install_headers)
+        url = f"{API_URL}/lovelace/resources"
+        if USER_TOKEN: pass 
+
+        get_resp = requests.get(url, headers=install_headers)
         if get_resp.status_code in [401, 403, 404]:
-            return False, "Brak uprawnień! Wymagany Token Administratora."
+            return False, "Brak uprawnień API."
         
-        current_resources = [r['url'] for r in get_resp.json()]
+        resources = get_resp.json()
+        for res in resources:
+            if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
 
-        for card_url in CARDS_TO_INSTALL:
-            if card_url in current_resources:
-                continue # Już jest, pomijamy
-
-            payload = {"url": card_url, "type": "module"}
-            post_resp = requests.post(f"{API_URL}/lovelace/resources", headers=install_headers, json=payload)
-            
-            if post_resp.status_code in [200, 201]:
-                success_count += 1
-                log_messages.append(f"Dodano: {card_url}")
-            else:
-                log_messages.append(f"Błąd {card_url}: {post_resp.text}")
-
-        if success_count > 0:
-            return True, f"Zainstalowano {success_count} kart! {', '.join(log_messages)}"
-        else:
-            return True, "Wszystkie karty są już zainstalowane."
-
+        payload = {"url": CARD_URL, "type": "module"}
+        post_resp = requests.post(url, headers=install_headers, json=payload)
+        
+        if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
+        else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
 HTML_PAGE = """
@@ -324,11 +308,7 @@ HTML_PAGE = """
             const res = await fetch('api/install_card', { method: 'POST' });
             const data = await res.json();
             if(data.success) {
-                alert("Automatyczna instalacja zablokowana. Musisz dodać te zasoby ręcznie:\n\n" +
-                        "/local/employee-card.js\n" +
-                        "/local/community_cards/auto-entities.js\n" +
-                        "/local/community_cards/apexcharts-card.js\n" +
-                        "/local/community_cards/template-entity-row.js");
+                alert("SUKCES! " + data.message + "\\n\\nTeraz odśwież przeglądarkę (Ctrl+F5)!");
             } else {
                 installModal.show();
             }
