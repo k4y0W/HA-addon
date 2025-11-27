@@ -7,8 +7,8 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, Response
 
 # ==========================================
-# JEŚLI CHCESZ, MOŻESZ TU WKLEIĆ TOKEN, ALE WAŻNIEJSZY JEST W MAIN.PY
-HARDCODED_TOKEN = ""
+# 1. TUTAJ WKLEJ SWÓJ DŁUGI TOKEN (W CUDZYSŁOWACH ""):
+HARDCODED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjNmZiZjhkYjgzNzI0MWY0ODlkOWRhNjM1YWZkMmQ5MSIsImlhdCI6MTc2NDI1MTI5MywiZXhwIjoyMDc5NjExMjkzfQ.8ED4IyBltazDjbnzXsbyLwHg6zUF61EZ-aXUhR6BnEM" 
 # ==========================================
 
 DATA_FILE = "/data/employees.json"
@@ -19,7 +19,6 @@ OPTIONS_FILE = "/data/options.json"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
 
-# Próba odczytu z pliku opcji
 try:
     with open(OPTIONS_FILE, 'r') as f:
         opts = json.load(f)

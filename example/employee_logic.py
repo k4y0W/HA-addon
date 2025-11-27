@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 # ==========================================
-# TUTAJ WKLEJ SWÓJ DŁUGI TOKEN, INACZEJ BĘDZIE BŁĄD 405:
+# 2. TUTAJ TEŻ WKLEJ SWÓJ DŁUGI TOKEN:
 HARDCODED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjNmZiZjhkYjgzNzI0MWY0ODlkOWRhNjM1YWZkMmQ5MSIsImlhdCI6MTc2NDI1MTI5MywiZXhwIjoyMDc5NjExMjkzfQ.8ED4IyBltazDjbnzXsbyLwHg6zUF61EZ-aXUhR6BnEM"
 # ==========================================
 
@@ -18,7 +18,6 @@ OPTIONS_FILE = "/data/options.json"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
 
-# Próba odczytu z pliku opcji
 try:
     if os.path.exists(OPTIONS_FILE):
         with open(OPTIONS_FILE, 'r') as f:
