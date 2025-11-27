@@ -5,16 +5,11 @@ import json
 import sys
 from datetime import datetime
 
-# ==========================================
-# 2. WKLEJ TOKEN PONIŻEJ MIĘDZY CUDZYSŁOWY:
 HARDCODED_TOKEN = ""
-# ==========================================
-
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
 
-# Konfiguracja API
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
 
@@ -25,7 +20,7 @@ try:
             USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
 except: pass
 
-# Wybór tokena
+
 if len(HARDCODED_TOKEN) > 50:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] >>> UŻYWAM TOKENA HARDCODED (Tryb Administratora) <<<", flush=True)
     TOKEN = HARDCODED_TOKEN
