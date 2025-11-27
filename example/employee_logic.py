@@ -6,20 +6,37 @@ import sys
 from datetime import datetime
 
 # ==========================================
-# TUTAJ WKLEJ SWÓJ DŁUGI TOKEN:
-HARDCODED_TOKEN = "TUTAJ_WKLEJ_TOKEN"
+# TUTAJ WKLEJ SWÓJ DŁUGI TOKEN, INACZEJ BĘDZIE BŁĄD 405:
+HARDCODED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjNmZiZjhkYjgzNzI0MWY0ODlkOWRhNjM1YWZkMmQ5MSIsImlhdCI6MTc2NDI1MTI5MywiZXhwIjoyMDc5NjExMjkzfQ.8ED4IyBltazDjbnzXsbyLwHg6zUF61EZ-aXUhR6BnEM"
 # ==========================================
 
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
+OPTIONS_FILE = "/data/options.json"
 
+# Konfiguracja API
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+USER_TOKEN_FROM_FILE = ""
+
+# Próba odczytu z pliku opcji
+try:
+    if os.path.exists(OPTIONS_FILE):
+        with open(OPTIONS_FILE, 'r') as f:
+            opts = json.load(f)
+            USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
+except: pass
+
+# Wybór tokena
 if len(HARDCODED_TOKEN) > 50:
-    print(">>> UŻYWAM TOKENA HARDCODED (Tryb Administratora) <<<", flush=True)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] >>> UŻYWAM TOKENA HARDCODED (Tryb Administratora) <<<", flush=True)
     TOKEN = HARDCODED_TOKEN
     API_URL = "http://homeassistant:8123/api"
+elif len(USER_TOKEN_FROM_FILE) > 50:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] >>> UŻYWAM TOKENA Z PLIKU (Tryb Administratora) <<<", flush=True)
+    TOKEN = USER_TOKEN_FROM_FILE
+    API_URL = "http://homeassistant:8123/api"
 else:
-    print(">>> BRAK TOKENA USERA - UŻYWAM SUPERVISORA (Brak usuwania!) <<<", flush=True)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] >>> BRAK TOKENA USERA - UŻYWAM SUPERVISORA (Brak usuwania!) <<<", flush=True)
     TOKEN = SUPERVISOR_TOKEN
     API_URL = "http://supervisor/core/api"
 
