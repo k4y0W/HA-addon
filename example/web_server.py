@@ -7,15 +7,14 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, Response
 
 # ==========================================
-# 1. TUTAJ WKLEJ SWÓJ DŁUGI TOKEN (W CUDZYSŁOWACH ""):
-HARDCODED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjNmZiZjhkYjgzNzI0MWY0ODlkOWRhNjM1YWZkMmQ5MSIsImlhdCI6MTc2NDI1MTI5MywiZXhwIjoyMDc5NjExMjkzfQ.8ED4IyBltazDjbnzXsbyLwHg6zUF61EZ-aXUhR6BnEM" 
+# 1. WKLEJ TOKEN PONIŻEJ MIĘDZY CUDZYSŁOWY:
+HARDCODED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjNmZiZjhkYjgzNzI0MWY0ODlkOWRhNjM1YWZkMmQ5MSIsImlhdCI6MTc2NDI1MTI5MywiZXhwIjoyMDc5NjExMjkzfQ.8ED4IyBltazDjbnzXsbyLwHg6zUF61EZ-aXUhR6BnEM"
 # ==========================================
 
 DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
 
-# Konfiguracja API
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
 
@@ -25,7 +24,7 @@ try:
         USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
 except: pass
 
-# Wybór tokena (Priorytet: Hardcoded > Plik > Supervisor)
+# Logika wyboru tokena
 if len(HARDCODED_TOKEN) > 50:
     TOKEN = HARDCODED_TOKEN
     API_URL = "http://homeassistant:8123/api"
@@ -44,10 +43,8 @@ HEADERS = {
 app = Flask(__name__)
 
 SUFFIXES_TO_CLEAN = [
-    "_status", "_czas_pracy", 
-    "_temperatura", "_wilgotnosc", "_cisnienie", 
-    "_moc", "_napiecie", "_natezenie", 
-    "_bateria", "_pm25", "_jasnosc"
+    "_status", "_czas_pracy", "_temperatura", "_wilgotnosc", "_cisnienie", 
+    "_moc", "_napiecie", "_natezenie", "_bateria", "_pm25", "_jasnosc"
 ]
 
 PRETTY_NAMES = {
@@ -92,7 +89,6 @@ def get_clean_sensors():
                 device_class = attrs.get("device_class")
                 
                 if not (eid.startswith("sensor.") or eid.startswith("binary_sensor.") or eid.startswith("switch.") or eid.startswith("light.")): continue
-                
                 is_virtual = False
                 for suffix in GENERATED_SUFFIXES:
                     if eid.endswith(suffix): is_virtual = True; break
@@ -142,6 +138,7 @@ def register_lovelace_resource():
         else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
+# UWAGA: PONIŻEJ JEST DŁUGI CIĄG TEKSTOWY HTML. SKOPIUJ GO DO KOŃCA PLIKU!
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -443,7 +440,6 @@ HTML_PAGE = """
         const selected = [];
         document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
         
-        // --- BLOKADA PUSTYCH SENSORÓW ---
         if(selected.length === 0) {
             alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
             return;
