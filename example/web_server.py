@@ -427,10 +427,12 @@ HTML_PAGE = """
         const selected = [];
         document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
         
+        // --- TO JEST BLOKADA (WALIDACJA) ---
         if(selected.length === 0) {
-            alert("Musisz wybrać przynajmniej jeden czujnik!");
+            alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
             return;
         }
+        // -----------------------------------
 
         await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: group, sensors: selected}) });
         document.getElementById('empName').value = '';
