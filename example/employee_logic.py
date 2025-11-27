@@ -5,10 +5,7 @@ import json
 import sys
 from datetime import datetime
 
-# --- KONFIGURACJA ---
-# Domyślne wartości (Supervisor)
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
-# Domyślny adres proxy
 API_URL = "http://supervisor/core/api" 
 TOKEN = SUPERVISOR_TOKEN
 
@@ -16,8 +13,6 @@ DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
 
-# --- PRÓBA WCZYTANIA TOKENA ADMINISTRATORA (User Token) ---
-# To pozwala ominąć błąd 405 Method Not Allowed
 try:
     if os.path.exists(OPTIONS_FILE):
         with open(OPTIONS_FILE, 'r') as f:
@@ -26,7 +21,6 @@ try:
             if user_token:
                 print(">>> UŻYWAM TOKENA UŻYTKOWNIKA (Tryb Administratora) <<<", flush=True)
                 TOKEN = user_token
-                # Łączymy się bezpośrednio do core, omijając proxy Supervisora
                 API_URL = "http://homeassistant:8123/api"
             else:
                 print(">>> UŻYWAM TOKENA SUPERVISORA (Tryb Ograniczony) <<<", flush=True)
@@ -38,7 +32,6 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# --- MAPOWANIE JEDNOSTEK ---
 UNIT_MAP = {
     "W": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
     "kW": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
@@ -120,7 +113,6 @@ def main():
             emps = get_data()
             allowed_ids = set()
 
-            # 1. Budowanie Białej Listy
             for emp in emps:
                 name_clean = emp['name'].strip()
                 safe = name_clean.lower().replace(" ", "_")
@@ -147,11 +139,11 @@ def main():
                     if suffix_info:
                         allowed_ids.add(f"sensor.{safe}_{suffix_info['suffix']}")
 
-            # 2. Czyszczenie duchów
             try:
                 r = requests.get(f"{API_URL}/states", headers=HEADERS)
                 if r.status_code == 200:
                     all_states = r.json()
+                    
                     for entity in all_states:
                         eid = entity['entity_id']
                         if not eid.startswith("sensor."): continue
@@ -165,10 +157,10 @@ def main():
                         if is_managed:
                             if eid not in allowed_ids:
                                 delete_entity_force(eid)
+                                
             except Exception as e:
                 log(f"Błąd skanowania: {e}")
 
-            # 3. Aktualizacja stanów
             current_date_str = datetime.now().strftime("%Y-%m-%d")
             if current_date_str != memory["date"]:
                 memory["date"] = current_date_str

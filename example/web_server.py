@@ -1,6 +1,5 @@
 import json
 import os
-import logging
 import requests
 import csv
 import io
@@ -27,7 +26,6 @@ HEADERS = {
 
 app = Flask(__name__)
 
-# Lista końcówek do wyczyszczenia przy usuwaniu pracownika
 SUFFIXES_TO_CLEAN = [
     "_status", "_czas_pracy", 
     "_temperatura", "_wilgotnosc", "_cisnienie", 
@@ -59,13 +57,10 @@ def load_json(file_path):
 def save_json(file_path, data):
     with open(file_path, 'w') as f: json.dump(data, f, indent=4)
 
-# --- NOWA FUNKCJA DO USUWANIA STANU Z HA ---
 def delete_ha_state(entity_id):
     try:
-        # Metoda DELETE usuwa encję z pamięci HA natychmiast
         requests.delete(f"{API_URL}/states/{entity_id}", headers=HEADERS)
-    except Exception as e:
-        print(f"Blad usuwania {entity_id}: {e}", flush=True)
+    except: pass
 
 def get_clean_sensors():
     sensors = []
@@ -148,8 +143,6 @@ HTML_PAGE = """
         .tile-header { font-weight: bold; color: #333; font-size: 0.95rem; }
         .tile-sub { font-size: 0.75rem; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .tile-val { font-size: 0.85rem; font-weight: 600; color: #0d6efd; margin-left: auto; }
-        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-        .bg-working { background-color: #28a745; } .bg-idle { background-color: #ffc107; } .bg-absent { background-color: #dc3545; }
         .group-filters { overflow-x: auto; white-space: nowrap; padding-bottom: 10px; }
         .group-btn { border-radius: 20px; padding: 5px 15px; border: 1px solid #dee2e6; background: white; margin-right: 5px; color: #555; transition:0.2s; cursor: pointer; }
         .group-btn:hover { background: #e9ecef; }
@@ -348,7 +341,6 @@ HTML_PAGE = """
 
     document.getElementById('sensorSearch').addEventListener('input', (e) => renderSensorList(e.target.value));
 
-    // --- GRUPY ---
     async function loadGroups() {
         const res = await fetch('api/groups');
         currentGroups = await res.json();
@@ -380,7 +372,6 @@ HTML_PAGE = """
         if(confirm("Usunąć grupę?")) { await fetch('api/groups/'+n, {method:'DELETE'}); loadGroups(); loadConfig(); refreshMonitorData(); }
     };
 
-    // --- MONITOR ---
     function filterMonitor(group) {
         currentFilter = group;
         renderFilterBar();
@@ -435,7 +426,12 @@ HTML_PAGE = """
         const group = document.getElementById('empGroup').value;
         const selected = [];
         document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
-        if(selected.length === 0) return alert("Wybierz czujnik!");
+        
+        if(selected.length === 0) {
+            alert("Musisz wybrać przynajmniej jeden czujnik!");
+            return;
+        }
+
         await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: group, sensors: selected}) });
         document.getElementById('empName').value = '';
         renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
@@ -453,7 +449,6 @@ HTML_PAGE = """
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
 
-# --- API ---
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
     grps = load_json(GROUPS_FILE)
@@ -488,29 +483,22 @@ def api_post():
     save_json(DATA_FILE, emps)
     return jsonify({"status":"ok"})
 
-# --- ZAKTUALIZOWANA METODA USUWANIA ---
 @app.route('/api/employees/<int:i>', methods=['DELETE'])
 def api_del(i):
     emps = load_json(DATA_FILE)
     if 0 <= i < len(emps):
-        # 1. Pobierz dane o pracowniku, którego usuwamy
         to_delete = emps[i]
         safe_name = to_delete['name'].lower().replace(" ", "_")
         
-        # 2. Usuń główne encje z HA (Status i Czas)
         delete_ha_state(f"sensor.{safe_name}_status")
         delete_ha_state(f"sensor.{safe_name}_czas_pracy")
-        
-        # 3. Usuń wszystkie wygenerowane encje (moc, temp, itp.)
         for suffix in SUFFIXES_TO_CLEAN:
             delete_ha_state(f"sensor.{safe_name}{suffix}")
             
-        # 4. Na końcu usuń z pliku JSON
         del emps[i]
         save_json(DATA_FILE, emps)
         
     return jsonify({"status":"ok"})
-# --------------------------------------
 
 @app.route('/api/monitor', methods=['GET'])
 def api_monitor():
