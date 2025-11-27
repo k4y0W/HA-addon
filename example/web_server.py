@@ -6,21 +6,29 @@ import io
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, Response
 
+# ==========================================
+# TUTAJ WKLEJ SWÓJ DŁUGI TOKEN Z HOME ASSISTANT:
+HARDCODED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjMmU0ZjJlNjk2YWY0OTZjYTliY2ZhZGQ5MzU3MzNkNCIsImlhdCI6MTc2NDI1MDcyNiwiZXhwIjoyMDc5NjEwNzI2fQ._Il_-s9XM8aWjJ-nXhaeZl7KcyLqTIH1QdF3fY_3jzg"
+# ==========================================
+
 DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
-OPTIONS_FILE = "/data/options.json"
+
+# Konfiguracja API
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
-USER_TOKEN = ""
+if len(HARDCODED_TOKEN) > 50:
+    # Jeśli podano token w kodzie, używamy trybu Administratora
+    print(">>> UŻYWAM TOKENA HARDCODED (Tryb Administratora) <<<", flush=True)
+    TOKEN = HARDCODED_TOKEN
+    API_URL = "http://homeassistant:8123/api"
+else:
+    # Tryb awaryjny (nie pozwoli usuwać)
+    print(">>> BRAK TOKENA USERA - UŻYWAM SUPERVISORA (Brak usuwania!) <<<", flush=True)
+    TOKEN = SUPERVISOR_TOKEN
+    API_URL = "http://supervisor/core/api"
 
-try:
-    with open(OPTIONS_FILE, 'r') as f:
-        opts = json.load(f)
-        USER_TOKEN = opts.get("ha_token", "")
-except: pass
-
-API_URL = "http://supervisor/core/api"
 HEADERS = {
-    "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+    "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json",
 }
 
@@ -111,8 +119,8 @@ def get_ha_state(entity_id):
 
 def register_lovelace_resource():
     CARD_URL = "/local/employee-card.js"
-    token_to_use = USER_TOKEN if USER_TOKEN else SUPERVISOR_TOKEN
-    install_headers = {"Authorization": f"Bearer {token_to_use}", "Content-Type": "application/json"}
+    # Używamy TOKENA z nagłówka, który już jest ustawiony poprawnie wyżej
+    install_headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
     try:
         url = f"{API_URL}/lovelace/resources"
         get_resp = requests.get(url, headers=install_headers)
@@ -427,12 +435,11 @@ HTML_PAGE = """
         const selected = [];
         document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
         
-        // --- TO JEST BLOKADA (WALIDACJA) ---
+        // --- BLOKADA PUSTYCH SENSORÓW ---
         if(selected.length === 0) {
             alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
             return;
         }
-        // -----------------------------------
 
         await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: group, sensors: selected}) });
         document.getElementById('empName').value = '';
@@ -445,109 +452,3 @@ HTML_PAGE = """
 </script>
 </body>
 </html>
-"""
-
-@app.route('/')
-def index():
-    return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
-
-@app.route('/api/groups', methods=['GET', 'POST'])
-def handle_groups():
-    grps = load_json(GROUPS_FILE)
-    if not grps: grps = ["Domyślna"]
-    if request.method == 'POST':
-        name = request.json.get('name')
-        if name and name not in grps: grps.append(name)
-        save_json(GROUPS_FILE, grps)
-    return jsonify(grps)
-
-@app.route('/api/groups/<name>', methods=['DELETE'])
-def del_group(name):
-    if name == "Domyślna": return jsonify({"error": "Nie można usunąć"}), 400
-    grps = load_json(GROUPS_FILE)
-    if name in grps: grps.remove(name)
-    save_json(GROUPS_FILE, grps)
-    emps = load_json(DATA_FILE)
-    for e in emps:
-        if e.get('group') == name: e['group'] = "Domyślna"
-    save_json(DATA_FILE, emps)
-    return jsonify({"status":"ok"})
-
-@app.route('/api/employees', methods=['GET'])
-def api_get(): return jsonify(load_json(DATA_FILE))
-
-@app.route('/api/employees', methods=['POST'])
-def api_post():
-    data = request.json
-    emps = load_json(DATA_FILE)
-    emps = [e for e in emps if e['name'] != data['name']]
-    emps.append(data)
-    save_json(DATA_FILE, emps)
-    return jsonify({"status":"ok"})
-
-@app.route('/api/employees/<int:i>', methods=['DELETE'])
-def api_del(i):
-    emps = load_json(DATA_FILE)
-    if 0 <= i < len(emps):
-        to_delete = emps[i]
-        safe_name = to_delete['name'].lower().replace(" ", "_")
-        
-        delete_ha_state(f"sensor.{safe_name}_status")
-        delete_ha_state(f"sensor.{safe_name}_czas_pracy")
-        for suffix in SUFFIXES_TO_CLEAN:
-            delete_ha_state(f"sensor.{safe_name}{suffix}")
-            
-        del emps[i]
-        save_json(DATA_FILE, emps)
-        
-    return jsonify({"status":"ok"})
-
-@app.route('/api/monitor', methods=['GET'])
-def api_monitor():
-    emps = load_json(DATA_FILE)
-    res = []
-    for emp in emps:
-        safe = emp['name'].lower().replace(" ","_")
-        status = get_ha_state(f"sensor.{safe}_status") or "N/A"
-        time = get_ha_state(f"sensor.{safe}_czas_pracy") or "0"
-        meas = []
-        for entity_id in emp.get('sensors', []):
-            val = get_ha_state(entity_id)
-            try:
-                r = requests.get(f"{API_URL}/states/{entity_id}", headers=HEADERS)
-                data = r.json()
-                attrs = data['attributes']
-                friendly_name = attrs.get('friendly_name', entity_id)
-                dc = attrs.get('device_class')
-                unit = attrs.get('unit_of_measurement', '')
-                label = friendly_name
-                if dc in PRETTY_NAMES: label = PRETTY_NAMES[dc]
-                elif unit == "W": label = "Moc"
-                meas.append({"label": label, "value": val, "unit": unit})
-            except: pass
-        res.append({"name": emp['name'], "group": emp.get('group', 'Domyślna'), "status": status, "work_time": time, "measurements": meas})
-    return jsonify(res)
-
-@app.route('/api/export_csv')
-def export_csv():
-    import csv, io
-    from datetime import datetime
-    emps = load_json(DATA_FILE)
-    si = io.StringIO(); cw = csv.writer(si, delimiter=';')
-    cw.writerow(["Data", "Imie", "Grupa", "Status", "Czas (min)"])
-    today = datetime.now().strftime("%Y-%m-%d %H:%M")
-    for e in emps:
-        safe = e['name'].lower().replace(" ", "_")
-        status = get_ha_state(f"sensor.{safe}_status")
-        time = get_ha_state(f"sensor.{safe}_czas_pracy")
-        if time and '.' in time: time = time.replace('.', ',')
-        cw.writerow([today, e['name'], e.get('group', ''), status, time])
-    return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport.csv"})
-
-@app.route('/api/install_card', methods=['POST'])
-def api_install_card():
-    success, msg = register_lovelace_resource()
-    return jsonify({"success": success, "message": msg})
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)

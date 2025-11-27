@@ -5,27 +5,23 @@ import json
 import sys
 from datetime import datetime
 
-SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
-API_URL = "http://supervisor/core/api" 
-TOKEN = SUPERVISOR_TOKEN
+# ==========================================
+# TUTAJ WKLEJ SWÓJ DŁUGI TOKEN:
+HARDCODED_TOKEN = "TUTAJ_WKLEJ_TOKEN"
+# ==========================================
 
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
-OPTIONS_FILE = "/data/options.json"
 
-try:
-    if os.path.exists(OPTIONS_FILE):
-        with open(OPTIONS_FILE, 'r') as f:
-            opts = json.load(f)
-            user_token = opts.get("ha_token", "").strip()
-            if user_token:
-                print(">>> UŻYWAM TOKENA UŻYTKOWNIKA (Tryb Administratora) <<<", flush=True)
-                TOKEN = user_token
-                API_URL = "http://homeassistant:8123/api"
-            else:
-                print(">>> UŻYWAM TOKENA SUPERVISORA (Tryb Ograniczony) <<<", flush=True)
-except Exception as e:
-    print(f"Błąd wczytywania opcji: {e}", flush=True)
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+if len(HARDCODED_TOKEN) > 50:
+    print(">>> UŻYWAM TOKENA HARDCODED (Tryb Administratora) <<<", flush=True)
+    TOKEN = HARDCODED_TOKEN
+    API_URL = "http://homeassistant:8123/api"
+else:
+    print(">>> BRAK TOKENA USERA - UŻYWAM SUPERVISORA (Brak usuwania!) <<<", flush=True)
+    TOKEN = SUPERVISOR_TOKEN
+    API_URL = "http://supervisor/core/api"
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
