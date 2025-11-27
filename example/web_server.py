@@ -6,10 +6,9 @@ import io
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, Response
 
-# ==========================================
-# 1. WKLEJ TOKEN PONIŻEJ MIĘDZY CUDZYSŁOWY:
-HARDCODED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjNmZiZjhkYjgzNzI0MWY0ODlkOWRhNjM1YWZkMmQ5MSIsImlhdCI6MTc2NDI1MTI5MywiZXhwIjoyMDc5NjExMjkzfQ.8ED4IyBltazDjbnzXsbyLwHg6zUF61EZ-aXUhR6BnEM"
-# ==========================================
+
+HARDCODED_TOKEN = ""
+
 
 DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
@@ -24,7 +23,7 @@ try:
         USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
 except: pass
 
-# Logika wyboru tokena
+
 if len(HARDCODED_TOKEN) > 50:
     TOKEN = HARDCODED_TOKEN
     API_URL = "http://homeassistant:8123/api"
@@ -138,7 +137,6 @@ def register_lovelace_resource():
         else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
-# UWAGA: PONIŻEJ JEST DŁUGI CIĄG TEKSTOWY HTML. SKOPIUJ GO DO KOŃCA PLIKU!
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">

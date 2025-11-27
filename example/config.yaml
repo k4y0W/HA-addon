@@ -1,5 +1,5 @@
 name: Employee Manager
-version: "1.2.89"
+version: "1.2.90"
 slug: employee_manager_v2
 description: System zarządzania pracownikami
 url: https://github.com/k4y0W/HA-addon
@@ -14,5 +14,7 @@ map:
 arch:
   - aarch64
   - amd64
-options: {}
-schema: {}
+options:
+  ha_token: ""
+schema:
+  ha_token: str

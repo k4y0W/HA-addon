@@ -7,7 +7,7 @@ from datetime import datetime
 
 # ==========================================
 # 2. WKLEJ TOKEN PONIŻEJ MIĘDZY CUDZYSŁOWY:
-HARDCODED_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjNmZiZjhkYjgzNzI0MWY0ODlkOWRhNjM1YWZkMmQ5MSIsImlhdCI6MTc2NDI1MTI5MywiZXhwIjoyMDc5NjExMjkzfQ.8ED4IyBltazDjbnzXsbyLwHg6zUF61EZ-aXUhR6BnEM"
+HARDCODED_TOKEN = ""
 # ==========================================
 
 DATA_FILE = "/data/employees.json"
