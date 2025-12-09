@@ -3,12 +3,46 @@ import time
 import requests
 import json
 import sys
+import sqlite3
 from datetime import datetime
 
 HARDCODED_TOKEN = ""
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
+DB_FILE = "/share/employee_history.db"
+
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+def init_db():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS work_history
+                     (work_date TEXT, employee_name TEXT, minutes_worked INTEGER, 
+                     UNIQUE(work_date, employee_name))''')
+        conn.commit()
+        conn.close()
+        log(f"Baza danych zainicjowana: {DB_FILE}")
+    except Exception as e:
+        log(f"Błąd inicjalizacji bazy: {e}")
+
+def log_minute_to_db(employee_name):
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO work_history (work_date, employee_name, minutes_worked) VALUES (?, ?, 1)", 
+                      (today, employee_name))
+        except sqlite3.IntegrityError:
+            c.execute("UPDATE work_history SET minutes_worked = minutes_worked + 1 WHERE work_date=? AND employee_name=?", 
+                      (today, employee_name))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log(f"Błąd zapisu do bazy dla {employee_name}: {e}")
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
@@ -20,17 +54,16 @@ try:
             USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
 except: pass
 
-
 if len(HARDCODED_TOKEN) > 50:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] >>> UŻYWAM TOKENA HARDCODED (Tryb Administratora) <<<", flush=True)
+    log(">>> UŻYWAM TOKENA HARDCODED (Tryb Administratora) <<<")
     TOKEN = HARDCODED_TOKEN
     API_URL = "http://homeassistant:8123/api"
 elif len(USER_TOKEN_FROM_FILE) > 50:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] >>> UŻYWAM TOKENA Z PLIKU (Tryb Administratora) <<<", flush=True)
+    log(">>> UŻYWAM TOKENA Z PLIKU (Tryb Administratora) <<<")
     TOKEN = USER_TOKEN_FROM_FILE
     API_URL = "http://homeassistant:8123/api"
 else:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] >>> BRAK TOKENA USERA - UŻYWAM SUPERVISORA (Brak usuwania!) <<<", flush=True)
+    log(">>> BRAK TOKENA USERA - UŻYWAM SUPERVISORA (Brak usuwania!) <<<")
     TOKEN = SUPERVISOR_TOKEN
     API_URL = "http://supervisor/core/api"
 
@@ -54,9 +87,6 @@ MANAGED_SUFFIXES = [
     "_status", "_czas_pracy", "_moc", "_napiecie", "_natezenie", 
     "_temperatura", "_wilgotnosc", "_cisnienie", "_bateria", "_pm25", "_jasnosc"
 ]
-
-def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 def get_data():
     if not os.path.exists(DATA_FILE): return []
@@ -97,17 +127,17 @@ def delete_entity_force(entity_id):
     try:
         log(f"-> PRÓBA USUNIĘCIA: {entity_id}")
         r = requests.delete(f"{API_URL}/states/{entity_id}", headers=HEADERS)
-        
         if r.status_code in [200, 201, 204]:
             log(f"   SUKCES! Usunięto {entity_id}")
         else:
             log(f"   BŁĄD API! Kod: {r.status_code}, Treść: {r.text}")
-            
     except Exception as e:
         log(f"   WYJĄTEK: {e}")
 
 def main():
     log(f"=== START SYSTEMU (API: {API_URL}) ===")
+    init_db()
+    
     memory = load_status()
     today_str = datetime.now().strftime("%Y-%m-%d")
     
@@ -115,14 +145,23 @@ def main():
         memory = {"date": today_str, "counters": {}}
     work_counters = memory.get("counters", {})
 
+    loop_counter = 0
+
     while True:
         try:
             emps = get_data()
             allowed_ids = set()
 
+            loop_counter += 1
+            should_save_db = False
+            
+            if loop_counter >= 6:
+                should_save_db = True
+                loop_counter = 0
+
             for emp in emps:
-                name_clean = emp['name'].strip()
-                safe = name_clean.lower().replace(" ", "_")
+                name = emp['name'].strip()
+                safe = name.lower().replace(" ", "_")
                 group = emp.get('group', 'Domyślna')
 
                 allowed_ids.add(f"sensor.{safe}_status")
@@ -150,7 +189,6 @@ def main():
                 r = requests.get(f"{API_URL}/states", headers=HEADERS)
                 if r.status_code == 200:
                     all_states = r.json()
-                    
                     for entity in all_states:
                         eid = entity['entity_id']
                         if not eid.startswith("sensor."): continue
@@ -219,7 +257,11 @@ def main():
                                 is_working = True
                 
                 status = "Pracuje" if is_working else "Nieobecny"
-                if is_working: work_counters[name] += (10/60)
+                if is_working: 
+                    work_counters[name] += (10/60)
+                    
+                if is_working and should_save_db:
+                    log_minute_to_db(name)
                 
                 set_state(f"sensor.{safe}_status", status, f"{name} - Status", "mdi:laptop" if is_working else "mdi:account-off", group)
                 set_state(f"sensor.{safe}_czas_pracy", round(work_counters[name], 1), f"{name} - Czas", "mdi:clock", group, "min")
