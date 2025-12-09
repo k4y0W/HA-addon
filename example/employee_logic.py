@@ -84,8 +84,7 @@ UNIT_MAP = {
 }
 
 MANAGED_SUFFIXES = [
-    "_status", "_czas_pracy", "_moc", "_napiecie", "_natezenie", 
-    "_temperatura", "_wilgotnosc", "_cisnienie", "_bateria", "_pm25", "_jasnosc"
+    "_status", "_czas_pracy"
 ]
 
 def get_data():
