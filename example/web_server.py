@@ -45,6 +45,13 @@ SUFFIXES_TO_CLEAN = [
     "_status", "_czas_pracy","Iphone"
 ]
 
+BLOCKED_KEYWORDS = [
+    "App Version", "Audio Output", "BSSID", "SSID", "Connection Type", 
+    "Geocoded Location", "Last Update Trigger", "Location permission", 
+    "SIM 1", "SIM 2", "Storage", "Battery State", "Activity", "Focus",
+    "Distance Traveled", "Floors Ascended", "Steps", "Average Active Pace"
+]
+
 PRETTY_NAMES = {
     "temperature": "Temperatura", "humidity": "Wilgotność", "pressure": "Ciśnienie",
     "power": "Moc", "energy": "Energia", "voltage": "Napięcie", "current": "Natężenie",
@@ -54,6 +61,9 @@ PRETTY_NAMES = {
 BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo."]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
 GENERATED_SUFFIXES = SUFFIXES_TO_CLEAN
+
+
+
 
 # --- FUNKCJE POMOCNICZE ---
 def load_json(file_path):
@@ -88,10 +98,15 @@ def get_clean_sensors():
                 device_class = attrs.get("device_class")
                 
                 if not (eid.startswith("sensor.") or eid.startswith("binary_sensor.") or eid.startswith("switch.") or eid.startswith("light.")): continue
+                
                 is_virtual = False
                 for suffix in GENERATED_SUFFIXES:
                     if eid.endswith(suffix): is_virtual = True; break
                 if is_virtual: continue
+
+                if any(junk in friendly_name for junk in BLOCKED_KEYWORDS): continue
+
+                # Filtr 4: Reszta techniczna
                 if " - " in friendly_name: continue
                 if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
@@ -99,12 +114,16 @@ def get_clean_sensors():
 
                 unit = attrs.get("unit_of_measurement", "")
                 main_label = friendly_name 
+                
+                # Nadawanie ładnych nazw (Pretty Names)
                 if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
                 elif unit == "kWh": main_label = "Energia"
                 elif unit == "hPa": main_label = "Ciśnienie"
                 elif unit == "%": main_label = "Wilgotność"
+                elif unit == "lx": main_label = "Jasność"
+                elif "Battery Level" in friendly_name: main_label = "Bateria" # Specjalny wyjątek dla iPhone
                 
                 sensors.append({"id": eid, "main_label": main_label, "sub_label": friendly_name, "unit": unit, "state": entity.get("state", "-"), "device_class": device_class})
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
