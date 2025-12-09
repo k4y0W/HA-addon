@@ -177,7 +177,7 @@ HTML_PAGE = """
         <div class="tab-pane fade show active" id="pills-monitor">
             <div class="d-flex justify-content-between mb-3">
                 <div class="group-filters d-flex" id="monitorFilters"></div>
-                <a href="/download_report" target="_blank" class="btn btn-outline-dark btn-sm" style="white-space:nowrap"><i class="mdi mdi-file-excel"></i> Pobierz Historię</a>
+                <a href="download_report" target="_blank" class="btn btn-outline-dark btn-sm" style="white-space:nowrap"><i class="mdi mdi-file-excel"></i> Pobierz Historię</a>
             </div>
             <div class="row g-3" id="dashboard-grid"></div>
         </div>

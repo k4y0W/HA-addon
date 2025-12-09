@@ -87,6 +87,13 @@ MANAGED_SUFFIXES = [
     "_status", "_czas_pracy","Iphone"
 ]
 
+BLOCKED_KEYWORDS = [
+    "App Version", "Audio Output", "BSSID", "SSID", "Connection Type", 
+    "Geocoded Location", "Last Update Trigger", "Location permission", 
+    "SIM 1", "SIM 2", "Storage", "Battery State", "Activity", "Focus",
+    "Distance Traveled", "Floors Ascended", "Steps", "Average Active Pace"
+]
+
 def get_data():
     if not os.path.exists(DATA_FILE): return []
     try:
