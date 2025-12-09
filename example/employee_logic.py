@@ -10,7 +10,7 @@ HARDCODED_TOKEN = ""
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
-DB_FILE = "/share/employee_history.db"
+DB_FILE = "/data/employee_history.db"
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)

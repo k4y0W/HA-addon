@@ -12,7 +12,7 @@ HARDCODED_TOKEN = ""
 DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
-DB_FILE = "/share/employee_history.db"  # Ta sama ścieżka co w logic.py
+DB_FILE = "/data/employee_history.db"
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
