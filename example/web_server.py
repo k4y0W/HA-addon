@@ -3,16 +3,16 @@ import os
 import requests
 import csv
 import io
+import sqlite3
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, Response
 
-
+# --- KONFIGURACJA ---
 HARDCODED_TOKEN = ""
-
-
 DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
+DB_FILE = "/share/employee_history.db"  # Ta sama ścieżka co w logic.py
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
@@ -22,7 +22,6 @@ try:
         opts = json.load(f)
         USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
 except: pass
-
 
 if len(HARDCODED_TOKEN) > 50:
     TOKEN = HARDCODED_TOKEN
@@ -41,6 +40,7 @@ HEADERS = {
 
 app = Flask(__name__)
 
+# --- KONFIGURACJA SENSORÓW ---
 SUFFIXES_TO_CLEAN = [
     "_status", "_czas_pracy", "_temperatura", "_wilgotnosc", "_cisnienie", 
     "_moc", "_napiecie", "_natezenie", "_bateria", "_pm25", "_jasnosc"
@@ -56,6 +56,7 @@ BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
 GENERATED_SUFFIXES = SUFFIXES_TO_CLEAN
 
+# --- FUNKCJE POMOCNICZE ---
 def load_json(file_path):
     if not os.path.exists(file_path):
         if file_path == GROUPS_FILE:
@@ -137,6 +138,7 @@ def register_lovelace_resource():
         else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
+# --- INTERFEJS HTML ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -176,7 +178,7 @@ HTML_PAGE = """
         <div class="tab-pane fade show active" id="pills-monitor">
             <div class="d-flex justify-content-between mb-3">
                 <div class="group-filters d-flex" id="monitorFilters"></div>
-                <a href="api/export_csv" target="_blank" class="btn btn-outline-dark btn-sm" style="white-space:nowrap"><i class="mdi mdi-file-excel"></i> CSV</a>
+                <a href="/download_report" target="_blank" class="btn btn-outline-dark btn-sm" style="white-space:nowrap"><i class="mdi mdi-file-excel"></i> Pobierz Historię</a>
             </div>
             <div class="row g-3" id="dashboard-grid"></div>
         </div>
@@ -456,6 +458,8 @@ HTML_PAGE = """
 </html>
 """
 
+# --- ENDPOINTY FLASK ---
+
 @app.route('/')
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
@@ -537,21 +541,28 @@ def api_monitor():
         res.append({"name": emp['name'], "group": emp.get('group', 'Domyślna'), "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
 
-@app.route('/api/export_csv')
-def export_csv():
-    import csv, io
-    from datetime import datetime
-    emps = load_json(DATA_FILE)
-    si = io.StringIO(); cw = csv.writer(si, delimiter=';')
-    cw.writerow(["Data", "Imie", "Grupa", "Status", "Czas (min)"])
-    today = datetime.now().strftime("%Y-%m-%d %H:%M")
-    for e in emps:
-        safe = e['name'].lower().replace(" ", "_")
-        status = get_ha_state(f"sensor.{safe}_status")
-        time = get_ha_state(f"sensor.{safe}_czas_pracy")
-        if time and '.' in time: time = time.replace('.', ',')
-        cw.writerow([today, e['name'], e.get('group', ''), status, time])
-    return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": f"attachment; filename=raport.csv"})
+@app.route('/download_report')
+def download_report():
+    """Generuje raport CSV z bazy danych SQLite"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT work_date, employee_name, minutes_worked FROM work_history ORDER BY work_date DESC")
+        rows = c.fetchall()
+        conn.close()
+
+        si = io.StringIO()
+        cw = csv.writer(si, delimiter=';')
+        cw.writerow(["Data", "Pracownik", "Minuty", "Godziny (ok.)"])
+        
+        for row in rows:
+            # row[0]=Date, row[1]=Name, row[2]=Minutes
+            hours = round(row[2] / 60, 2)
+            cw.writerow([row[0], row[1], row[2], str(hours).replace('.', ',')])
+            
+        return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": "attachment; filename=Raport_Historii.csv"})
+    except Exception as e:
+        return f"Błąd generowania raportu: {e}", 500
 
 @app.route('/api/install_card', methods=['POST'])
 def api_install_card():
