@@ -42,8 +42,7 @@ app = Flask(__name__)
 
 # --- KONFIGURACJA SENSORÓW ---
 SUFFIXES_TO_CLEAN = [
-    "_status", "_czas_pracy", "_temperatura", "_wilgotnosc", "_cisnienie", 
-    "_moc", "_napiecie", "_natezenie", "_bateria", "_pm25", "_jasnosc"
+    "_status", "_czas_pracy","Iphone"
 ]
 
 PRETTY_NAMES = {

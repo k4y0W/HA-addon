@@ -84,7 +84,7 @@ UNIT_MAP = {
 }
 
 MANAGED_SUFFIXES = [
-    "_status", "_czas_pracy"
+    "_status", "_czas_pracy","Iphone"
 ]
 
 def get_data():
