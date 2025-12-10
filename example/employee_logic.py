@@ -45,33 +45,42 @@ def log_minute_to_db(employee_name):
     except Exception as e:
         log(f"Błąd zapisu do bazy dla {employee_name}: {e}")
 
+import os
+import time
+import requests
+import json
+import sys
+import sqlite3
+from datetime import datetime
+
+# --- KONFIGURACJA PLIKÓW ---
+DATA_FILE = "/data/employees.json"
+STATUS_FILE = "/data/status.json"
+OPTIONS_FILE = "/data/options.json"
+DB_FILE = "/data/employee_history.db"
+HISTORY_FILE = "/data/history.json"
+
+# --- KONFIGURACJA API (NAPRAWIONA DLA ADD-ONÓW) ---
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
-USER_TOKEN_FROM_FILE = ""
 
-try:
-    if os.path.exists(OPTIONS_FILE):
-        with open(OPTIONS_FILE, 'r') as f:
-            opts = json.load(f)
-            USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
-except: pass
-
-if len(HARDCODED_TOKEN) > 50:
-    log(">>> UŻYWAM TOKENA HARDCODED (Tryb Administratora) <<<")
-    TOKEN = HARDCODED_TOKEN
-    API_URL = "http://homeassistant:8123/api"
-elif len(USER_TOKEN_FROM_FILE) > 50:
-    log(">>> UŻYWAM TOKENA Z PLIKU (Tryb Administratora) <<<")
-    TOKEN = USER_TOKEN_FROM_FILE
-    API_URL = "http://homeassistant:8123/api"
-else:
-    log(">>> BRAK TOKENA USERA - UŻYWAM SUPERVISORA (Brak usuwania!) <<<")
+if SUPERVISOR_TOKEN:
+    print(">>> [LOGIC] UŻYWAM TOKENA SUPERVISORA (Tryb Wewnętrzny) <<<", flush=True)
     TOKEN = SUPERVISOR_TOKEN
-    API_URL = "http://supervisor/core/api"
-
-HEADERS = {
-    "Authorization": f"Bearer {TOKEN}",
-    "Content-Type": "application/json"
-}
+    API_URL = "http://supervisor/core/api"  # Kluczowa zmiana: adres wewnętrzny
+else:
+    print(">>> [LOGIC] BRAK SUPERVISORA - SZUKAM W PLIKU <<<", flush=True)
+    try:
+        if os.path.exists(OPTIONS_FILE):
+            with open(OPTIONS_FILE, 'r') as f:
+                opts = json.load(f)
+                TOKEN = opts.get("ha_token", "")
+        else:
+            TOKEN = ""
+    except:
+        TOKEN = ""
+    
+    # Fallback tylko dla testów poza HA
+    API_URL = "http://homeassistant:8123/api"
 
 UNIT_MAP = {
     "W": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
