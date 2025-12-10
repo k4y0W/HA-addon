@@ -11,6 +11,7 @@ DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
+HISTORY_FILE = "/data/history.json"
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -138,6 +139,54 @@ def delete_entity_force(entity_id):
     except Exception as e:
         log(f"   WYJĄTEK: {e}")
 
+def save_report_to_db(work_counters):
+    log(">>> GENEROWANIE RAPORTU DO BAZY... <<<")
+    try:
+        history = []
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        snapshot = []
+        
+        emps = get_data() 
+        for emp in emps:
+            name = emp['name']
+            safe_name = name.lower().replace(" ", "_")
+            
+            status = "Nieznany"
+            status_data = get_state_full(f"sensor.{safe_name}_status")
+            if status_data: status = status_data['state']
+            
+            work_time = 0.0
+            if name in work_counters: work_time = round(work_counters[name], 1)
+            
+            snapshot.append({
+                "name": name,
+                "group": emp.get('group', 'Domyślna'),
+                "status": status,
+                "work_time": work_time
+            })
+
+        new_entry = {
+            "id": int(time.time()), 
+            "date": timestamp,
+            "entries": snapshot
+        }
+
+        history.insert(0, new_entry)
+        
+        if len(history) > 1000: history = history[:1000]
+
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=4)
+            
+        log(">>> RAPORT ZAPISANY <<<")
+
+    except Exception as e:
+        log(f"Błąd zapisu raportu: {e}")
+
 def main():
     log(f"=== START SYSTEMU (API: {API_URL}) ===")
     init_db()
@@ -150,9 +199,14 @@ def main():
     work_counters = memory.get("counters", {})
 
     loop_counter = 0
+    last_report_time = time.time()
 
     while True:
         try:
+            current_time = time.time()
+            if current_time - last_report_time >= 60:
+                save_report_to_db(work_counters)
+                last_report_time = current_time
             emps = get_data()
             allowed_ids = set()
 

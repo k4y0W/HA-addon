@@ -13,6 +13,7 @@ DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
+HISTORY_FILE = "/data/history.json"
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
@@ -107,38 +108,26 @@ def get_clean_sensors():
             for entity in all_states:
                 eid = entity['entity_id']
                 attrs = entity.get("attributes", {})
-                friendly_name = attrs.get("friendly_name", eid).lower() # Zamiana na małe litery dla łatwego szukania
+                friendly_name = attrs.get("friendly_name", eid).lower()
                 device_class = attrs.get("device_class")
                 
-                # 1. Sprawdź domenę (bierzemy tylko to co nas interesuje)
                 if not (eid.startswith(("sensor.", "binary_sensor.", "switch.", "light."))): continue
 
-                # 2. SPOSÓB SPRYTNY (PODPIS): Sprawdź atrybut 'managed_by'
-                # Jeśli sensor został stworzony przez Twój skrypt, ma ten atrybut.
-                # Dzięki temu ukrywamy WSZYSTKIE duplikaty (Jd, Mareczek, Zygmunt) automatycznie.
                 if attrs.get("managed_by") == "employee_manager":
                     continue
 
-                # 3. Zabezpieczenie (dla starych sensorów zanim skrypt je nadpisze)
-                # Jeśli nazwa kończy się na _status lub _czas_pracy, to na 99% jest to wirtualny sensor
                 if eid.endswith("_status") or eid.endswith("_czas_pracy"):
                     continue
 
-                # 4. Filtrowanie technicznych śmieci (Global Blacklist)
-                # Szuka słów "indicator", "filter", "lock" w nazwie.
-                # Zadziała dla "Air Purifier Filter", "Samsung Filter", "Xiaomi Filter" itd.
                 if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST):
                     continue
 
-                # 5. Standardowe blokady systemowe HA
                 if any(eid.startswith(p) for p in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
                 if " - " in friendly_name and "status" in friendly_name: continue 
 
-                # --- Budowanie obiektu ---
                 unit = attrs.get("unit_of_measurement", "")
                 
-                # Przywracamy oryginalną nazwę (z dużymi literami) do wyświetlania
                 orig_friendly_name = attrs.get("friendly_name", eid)
                 main_label = orig_friendly_name
                 
@@ -220,78 +209,33 @@ HTML_PAGE = """
         <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
             <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
             <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
+            <li class="nav-item"><button class="nav-link" id="tab-history" data-bs-toggle="pill" data-bs-target="#pills-history">Historia</button></li>
             <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj Kartę</button></li>
         </ul>
     </div>
 
-    <div class="tab-content">
-        <div class="tab-pane fade show active" id="pills-monitor">
-            <div class="d-flex justify-content-between mb-3">
-                <div class="group-filters d-flex" id="monitorFilters"></div>
-                <a href="download_report" target="_blank" class="btn btn-outline-dark btn-sm" style="white-space:nowrap"><i class="mdi mdi-file-excel"></i> Pobierz Historię</a>
+<div class="tab-content">
+    <div class="tab-pane fade show active" id="pills-monitor">
+        <div class="d-flex justify-content-between mb-3">
+            <div class="group-filters d-flex" id="monitorFilters"></div>
             </div>
-            <div class="row g-3" id="dashboard-grid"></div>
-        </div>
+        <div class="row g-3" id="dashboard-grid"></div>
+    </div>
 
-        <div class="tab-pane fade" id="pills-config">
-            <div class="row">
-                <div class="col-lg-7">
-                    <div class="card shadow-sm mb-4">
-                        <div class="card-header bg-white fw-bold">Dodaj / Edytuj</div>
-                        <div class="card-body">
-                            <form id="addForm">
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold">Imię i Nazwisko</label>
-                                    <input type="text" class="form-control" id="empName" required placeholder="np. Jan Kowalski">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold">Grupa (Dział)</label>
-                                    <select class="form-select" id="empGroup">
-                                        <option value="Domyślna">Domyślna</option>
-                                    </select>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold d-flex justify-content-between">
-                                        <span>Przypisz Czujniki</span>
-                                        <span class="badge bg-light text-dark fw-normal border" id="count-badge">0 wybranych</span>
-                                    </label>
-                                    <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch" placeholder="🔍 Filtruj...">
-                                    
-                                    <div class="sensor-list-container border rounded p-2 bg-light" style="max-height: 400px; overflow-y: auto;">
-                                        <div id="sensorList" class="d-flex flex-column gap-2">
-                                            <div class="text-center text-muted p-3">Ładowanie...</div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <button type="submit" class="btn btn-primary w-100">Zapisz Pracownika</button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-5">
-                    <div class="card shadow-sm">
-                        <div class="card-header bg-white fw-bold">Lista Pracowników</div>
-                        <div class="card-body p-0">
-                            <table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr><th>Imię</th><th>Liczba</th><th></th></tr></thead><tbody id="configTable"></tbody></table>
-                        </div>
-                    </div>
-                    
-                    <div class="card shadow-sm mt-3">
-                        <div class="card-header bg-white fw-bold">Grupy</div>
-                        <div class="card-body">
-                            <form id="groupForm" class="mb-3">
-                                <div class="input-group">
-                                    <input type="text" class="form-control" id="newGroup" placeholder="Nowa grupa..." required>
-                                    <button class="btn btn-success">Dodaj</button>
-                                </div>
-                            </form>
-                            <ul class="list-group" id="groupList"></ul>
-                        </div>
-                    </div>
-                </div>
+    <div class="tab-pane fade" id="pills-history">
+        <div class="card shadow-sm">
+            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                <span>Baza Raportów</span>
+                <button class="btn btn-sm btn-primary" onclick="loadHistory()"><i class="mdi mdi-refresh"></i> Odśwież</button>
+            </div>
+            <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
+                <div id="history-container">Ładowanie...</div>
             </div>
         </div>
+    </div>
+
+    <div class="tab-pane fade" id="pills-config">
+       </div>
     </div>
 </div>
 
@@ -621,3 +565,7 @@ def api_install_card():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
+@app.route('/api/history', methods=['GET'])
+def api_history():
+    return jsonify(load_json(HISTORY_FILE))
