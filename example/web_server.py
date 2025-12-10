@@ -4,8 +4,9 @@ import requests
 import csv
 import io
 import sqlite3
+import shutil # Importujemy shutil do łatwego kopiowania plików
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string, Response, send_file
+from flask import Flask, request, jsonify, render_template_string, Response
 
 # --- KONFIGURACJA ---
 HARDCODED_TOKEN = ""
@@ -13,8 +14,13 @@ DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
-HISTORY_FILE = "/data/history.json"
-CARD_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'employee-card.js')
+
+# Ścieżki plików dla karty
+# 1. Źródło: tam gdzie leży skrypt pythona (wewnątrz kontenera Add-onu)
+SOURCE_JS_FILE = "employee-card.js" 
+# 2. Cel: katalog widoczny dla Home Assistanta
+WWW_DIR = "/config/www"
+DEST_JS_FILE = os.path.join(WWW_DIR, "employee-card.js")
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
@@ -42,7 +48,7 @@ HEADERS = {
 
 app = Flask(__name__)
 
-# --- KONFIGURACJA SENSORÓW ---
+# --- KONFIGURACJA SENSORÓW (bez zmian) ---
 SUFFIXES_TO_CLEAN = [
     "_status", "_czas_pracy", 
     "_temperatura", "_wilgotnosc", "_cisnienie", 
@@ -50,7 +56,7 @@ SUFFIXES_TO_CLEAN = [
     "_bateria", "_pm25", "_jasnosc"
 ]
 GLOBAL_BLACKLIST = [
-    "indicator", "light", "led", "display",   
+    "indicator", "light", "led", "display",    
     "lock", "child", "physical control",     
     "filter", "life", "used time",           
     "alarm", "error", "fault", "problem",     
@@ -75,10 +81,6 @@ PRETTY_NAMES = {
 }
 BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo.", "button.", "input_"]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
-
-
-
-
 
 # --- FUNKCJE POMOCNICZE ---
 def load_json(file_path):
@@ -113,22 +115,14 @@ def get_clean_sensors():
                 device_class = attrs.get("device_class")
                 
                 if not (eid.startswith(("sensor.", "binary_sensor.", "switch.", "light."))): continue
-
-                if attrs.get("managed_by") == "employee_manager":
-                    continue
-
-                if eid.endswith("_status") or eid.endswith("_czas_pracy"):
-                    continue
-
-                if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST):
-                    continue
-
+                if attrs.get("managed_by") == "employee_manager": continue
+                if eid.endswith("_status") or eid.endswith("_czas_pracy"): continue
+                if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST): continue
                 if any(eid.startswith(p) for p in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
                 if " - " in friendly_name and "status" in friendly_name: continue 
 
                 unit = attrs.get("unit_of_measurement", "")
-                
                 orig_friendly_name = attrs.get("friendly_name", eid)
                 main_label = orig_friendly_name
                 
@@ -146,7 +140,6 @@ def get_clean_sensors():
                     "state": entity.get("state", "-"), 
                     "device_class": device_class
                 })
-            
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
     except Exception as e:
         print(f"Błąd API: {e}", flush=True)
@@ -163,19 +156,42 @@ def get_ha_state(entity_id):
     return "-"
 
 def register_lovelace_resource():
+    """Kopiuje plik z add-onu do config/www i rejestruje go."""
+    
+    # 1. Sprawdź czy plik źródłowy istnieje w kontenerze
+    if not os.path.exists(SOURCE_JS_FILE):
+        return False, f"Błąd: Nie znaleziono pliku źródłowego '{SOURCE_JS_FILE}' w kontenerze Add-onu!"
+
+    # 2. Skopiuj plik do /config/www/
+    try:
+        if not os.path.exists(WWW_DIR):
+            os.makedirs(WWW_DIR)
+        
+        # Kopiowanie i nadpisywanie
+        shutil.copy2(SOURCE_JS_FILE, DEST_JS_FILE)
+        print(f"Skopiowano {SOURCE_JS_FILE} do {DEST_JS_FILE}", flush=True)
+    except Exception as e:
+        return False, f"Błąd kopiowania pliku: {str(e)}. Sprawdź uprawnienia do /config."
+
+    # 3. Rejestracja w HA
     CARD_URL = "/local/employee-card.js"
     install_headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+    
     try:
         url = f"{API_URL}/lovelace/resources"
         get_resp = requests.get(url, headers=install_headers)
+        
         if get_resp.status_code in [401, 403, 404]: return False, "Brak uprawnień API."
+        
         resources = get_resp.json()
         for res in resources:
-            if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
+            if res['url'] == CARD_URL: return True, "Plik zaktualizowany, zasób już istnieje w HA."
+        
         payload = {"url": CARD_URL, "type": "module"}
         post_resp = requests.post(url, headers=install_headers, json=payload)
-        if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
-        else: return False, f"Błąd API: {post_resp.text}"
+        
+        if post_resp.status_code in [200, 201]: return True, "Sukces! Skopiowano plik i dodano kartę."
+        else: return False, f"Błąd rejestracji w API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
 # --- INTERFEJS HTML ---
@@ -210,7 +226,6 @@ HTML_PAGE = """
         <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
             <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
             <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
-            <li class="nav-item"><button class="nav-link" id="tab-history" data-bs-toggle="pill" data-bs-target="#pills-history">Historia</button></li>
             <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj Kartę</button></li>
         </ul>
     </div>
@@ -219,6 +234,7 @@ HTML_PAGE = """
         <div class="tab-pane fade show active" id="pills-monitor">
             <div class="d-flex justify-content-between mb-3">
                 <div class="group-filters d-flex" id="monitorFilters"></div>
+                <a href="download_report" target="_blank" class="btn btn-outline-dark btn-sm" style="white-space:nowrap"><i class="mdi mdi-file-excel"></i> Pobierz Historię</a>
             </div>
             <div class="row g-3" id="dashboard-grid"></div>
         </div>
@@ -253,6 +269,7 @@ HTML_PAGE = """
                                         </div>
                                     </div>
                                 </div>
+
                                 <button type="submit" class="btn btn-primary w-100">Zapisz Pracownika</button>
                             </form>
                         </div>
@@ -262,7 +279,7 @@ HTML_PAGE = """
                     <div class="card shadow-sm">
                         <div class="card-header bg-white fw-bold">Lista Pracowników</div>
                         <div class="card-body p-0">
-                            <table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr><th>Imię</th><th></th></tr></thead><tbody id="configTable"></tbody></table>
+                            <table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr><th>Imię</th><th>Liczba</th><th></th></tr></thead><tbody id="configTable"></tbody></table>
                         </div>
                     </div>
                     
@@ -278,18 +295,6 @@ HTML_PAGE = """
                             <ul class="list-group" id="groupList"></ul>
                         </div>
                     </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="tab-pane fade" id="pills-history">
-            <div class="card shadow-sm">
-                <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
-                    <span>Baza Raportów</span>
-                    <button class="btn btn-sm btn-primary" onclick="loadHistory()"><i class="mdi mdi-refresh"></i> Odśwież</button>
-                </div>
-                <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
-                    <div id="history-container">Ładowanie...</div>
                 </div>
             </div>
         </div>
@@ -322,10 +327,7 @@ HTML_PAGE = """
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // DANE Z FLASKA
     const ALL_SENSORS = {{ all_sensors | tojson }};
-    
-    // ELEMENTY DOM
     const chkContainer = document.getElementById('sensorList');
     const countBadge = document.getElementById('count-badge');
     const installModal = new bootstrap.Modal(document.getElementById('installModal'));
@@ -334,11 +336,9 @@ HTML_PAGE = """
     let allEmployeesData = [];
     let currentGroups = [];
 
-    // --- FUNKCJE POMOCNICZE ---
     function updateCount() { 
-        if(!chkContainer) return;
-        const count = chkContainer.querySelectorAll('input:checked').length;
-        if(countBadge) countBadge.innerText = count + " wybranych";
+        const count = document.querySelectorAll('#sensorList input:checked').length;
+        countBadge.innerText = count + " wybranych";
     }
 
     function copyLink() {
@@ -365,20 +365,17 @@ HTML_PAGE = """
             const res = await fetch('api/install_card', { method: 'POST' });
             const data = await res.json();
             if(data.success) alert("SUKCES! " + data.message + "\\n\\nOdśwież stronę (Ctrl+F5)!");
-            else installModal.show();
+            else {
+                alert("Błąd: " + data.message);
+                installModal.show();
+            }
         } catch (e) { installModal.show(); }
         btn.innerHTML = originalText;
     }
 
-    // --- RENDEROWANIE LISTY SENSORÓW ---
     function renderSensorList(filterText = "") {
-        if(!chkContainer) return;
         chkContainer.innerHTML = "";
-        
-        if (!ALL_SENSORS || ALL_SENSORS.length === 0) { 
-            chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów (lub błąd połączenia z HA).</div>'; 
-            return; 
-        }
+        if (!ALL_SENSORS || ALL_SENSORS.length === 0) { chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów.</div>'; return; }
 
         ALL_SENSORS.forEach(s => {
             const searchStr = (s.name + s.id + s.main_label).toLowerCase();
@@ -414,31 +411,21 @@ HTML_PAGE = """
         });
     }
 
-    // Listener do wyszukiwarki (z zabezpieczeniem ?)
-    document.getElementById('sensorSearch')?.addEventListener('input', (e) => renderSensorList(e.target.value));
+    document.getElementById('sensorSearch').addEventListener('input', (e) => renderSensorList(e.target.value));
 
-    // --- GRUPY ---
     async function loadGroups() {
         const res = await fetch('api/groups');
         currentGroups = await res.json();
         
-        const listEl = document.getElementById('groupList');
-        if(listEl) {
-            listEl.innerHTML = currentGroups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
-        }
+        document.getElementById('groupList').innerHTML = currentGroups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
         
-        const selectEl = document.getElementById('empGroup');
-        if(selectEl) {
-            selectEl.innerHTML = currentGroups.map(g => `<option value="${g}">${g}</option>`).join('');
-        }
+        document.getElementById('empGroup').innerHTML = currentGroups.map(g => `<option value="${g}">${g}</option>`).join('');
         
         renderFilterBar();
     }
 
     function renderFilterBar() {
         const filters = document.getElementById('monitorFilters');
-        if(!filters) return;
-        
         let html = `<button class="group-btn ${currentFilter==='Wszyscy'?'active':''}" onclick="filterMonitor('Wszyscy')">Wszyscy</button>`;
         currentGroups.forEach(g => {
             if(g !== 'Domyślna') html += `<button class="group-btn ${currentFilter===g?'active':''}" onclick="filterMonitor('${g}')">${g}</button>`;
@@ -446,22 +433,17 @@ HTML_PAGE = """
         filters.innerHTML = html;
     }
     
-    // Obsługa formularza grup
-    const groupForm = document.getElementById('groupForm');
-    if(groupForm) {
-        groupForm.onsubmit = async (e) => {
-            e.preventDefault();
-            await fetch('api/groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: document.getElementById('newGroup').value}) });
-            document.getElementById('newGroup').value=''; loadGroups();
-        };
-    }
+    document.getElementById('groupForm').onsubmit = async (e) => {
+        e.preventDefault();
+        await fetch('api/groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: document.getElementById('newGroup').value}) });
+        document.getElementById('newGroup').value=''; loadGroups();
+    };
     
     window.delGroup = async (n) => { 
         if(n === 'Domyślna') return alert("Nie można usunąć grupy Domyślna!");
         if(confirm("Usunąć grupę?")) { await fetch('api/groups/'+n, {method:'DELETE'}); loadGroups(); loadConfig(); refreshMonitorData(); }
     };
 
-    // --- MONITOR ---
     function filterMonitor(group) {
         currentFilter = group;
         renderFilterBar();
@@ -470,8 +452,6 @@ HTML_PAGE = """
 
     function renderGrid() {
         const grid = document.getElementById('dashboard-grid');
-        if(!grid) return;
-        
         const filtered = currentFilter === 'Wszyscy' ? allEmployeesData : allEmployeesData.filter(e => e.group === currentFilter);
         
         if(filtered.length === 0) { grid.innerHTML = '<p class="text-center mt-5 text-muted">Brak pracowników w tej grupie.</p>'; return; }
@@ -498,9 +478,7 @@ HTML_PAGE = """
     }
 
     async function refreshMonitorData() {
-        // Odświeżaj tylko jeśli zakładka Monitor jest aktywna
-        if (!document.getElementById('tab-monitor')?.classList.contains('active')) return;
-        
+        if (!document.getElementById('tab-monitor').classList.contains('active')) return;
         const res = await fetch('api/monitor');
         allEmployeesData = await res.json();
         renderGrid();
@@ -509,94 +487,31 @@ HTML_PAGE = """
     async function loadConfig() {
         const res = await fetch('api/employees');
         const data = await res.json();
-        const table = document.getElementById('configTable');
-        if(table) {
-            table.innerHTML = data.map((emp, i) => `
-                <tr><td><strong>${emp.name}</strong><br><span class="badge bg-secondary">${emp.group || 'Domyślna'}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
-            `).join('');
+        document.getElementById('configTable').innerHTML = data.map((emp, i) => `
+            <tr><td><strong>${emp.name}</strong><br><span class="badge bg-secondary">${emp.group || 'Domyślna'}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
+        `).join('');
+    }
+
+    document.getElementById('addForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('empName').value;
+        const group = document.getElementById('empGroup').value;
+        const selected = [];
+        document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
+        
+        if(selected.length === 0) {
+            alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
+            return;
         }
-    }
 
-    const addForm = document.getElementById('addForm');
-    if(addForm) {
-        addForm.onsubmit = async (e) => {
-            e.preventDefault();
-            const name = document.getElementById('empName').value;
-            const group = document.getElementById('empGroup').value;
-            const selected = [];
-            
-            if(chkContainer) {
-                chkContainer.querySelectorAll('input:checked').forEach(c => selected.push(c.value));
-            }
-            
-            if(selected.length === 0) {
-                alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
-                return;
-            }
-
-            await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: group, sensors: selected}) });
-            document.getElementById('empName').value = '';
-            renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
-        };
-    }
+        await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: group, sensors: selected}) });
+        document.getElementById('empName').value = '';
+        renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
+    };
 
     window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitorData(); } }
 
-    // --- HISTORIA ---
-    async function loadHistory() {
-        const container = document.getElementById('history-container');
-        if(!container) return;
-        
-        container.innerHTML = '<div class="p-4 text-center">Pobieranie danych...</div>';
-        try {
-            const res = await fetch('api/history');
-            const data = await res.json();
-            
-            if(!data || data.length === 0) {
-                container.innerHTML = '<div class="p-4 text-center text-muted">Brak raportów w bazie.</div>';
-                return;
-            }
-
-            let html = '';
-            data.forEach(report => {
-                html += `
-                <div class="border-bottom p-3">
-                    <div class="d-flex justify-content-between mb-2">
-                        <strong class="text-primary fs-5">${report.date}</strong>
-                        <span class="badge bg-secondary">ID: ${report.id}</span>
-                    </div>
-                    <table class="table table-sm table-bordered mb-0">
-                        <thead class="table-light">
-                            <tr><th>Pracownik</th><th>Grupa</th><th>Status</th><th>Czas pracy</th></tr>
-                        </thead>
-                        <tbody>
-                            ${report.entries.map(e => `
-                                <tr>
-                                    <td>${e.name}</td>
-                                    <td><small>${e.group}</small></td>
-                                    <td class="${e.status === 'Pracuje' ? 'text-success fw-bold' : ''}">${e.status}</td>
-                                    <td>${e.work_time} min</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>`;
-            });
-            container.innerHTML = html;
-        } catch(e) {
-            container.innerHTML = '<div class="p-4 text-danger">Błąd ładowania historii.</div>';
-        }
-    }
-
-    // Listener do Historii (z zabezpieczeniem ?)
-    document.getElementById('tab-history')?.addEventListener('shown.bs.tab', loadHistory);
-
-    // --- INICJALIZACJA ---
-    renderSensorList(); 
-    loadGroups(); 
-    loadConfig(); 
-    refreshMonitorData(); 
-    setInterval(refreshMonitorData, 3000);
+    renderSensorList(); loadGroups(); loadConfig(); refreshMonitorData(); setInterval(refreshMonitorData, 3000);
 </script>
 </body>
 </html>
@@ -687,7 +602,6 @@ def api_monitor():
 
 @app.route('/download_report')
 def download_report():
-    """Generuje raport CSV z bazy danych SQLite"""
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -700,7 +614,6 @@ def download_report():
         cw.writerow(["Data", "Pracownik", "Minuty", "Godziny (ok.)"])
         
         for row in rows:
-            # row[0]=Date, row[1]=Name, row[2]=Minutes
             hours = round(row[2] / 60, 2)
             cw.writerow([row[0], row[1], row[2], str(hours).replace('.', ',')])
             
@@ -713,16 +626,5 @@ def api_install_card():
     success, msg = register_lovelace_resource()
     return jsonify({"success": success, "message": msg})
 
-@app.route('/local/employee-card.js')
-def serve_card_file():
-    if os.path.exists(CARD_FILE_PATH):
-        return send_file(CARD_FILE_PATH, mimetype='application/javascript')
-    else:
-        return f"Błąd: Nie znaleziono pliku {CARD_FILE_PATH}", 404
-        
-@app.route('/api/history', methods=['GET'])
-def api_history():
-    return jsonify(load_json(HISTORY_FILE))
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
