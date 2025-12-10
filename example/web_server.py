@@ -4,9 +4,8 @@ import requests
 import csv
 import io
 import sqlite3
-import shutil # Importujemy shutil do łatwego kopiowania plików
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string, Response
+from flask import Flask, request, jsonify, render_template_string, Response, send_file
 
 # --- KONFIGURACJA ---
 HARDCODED_TOKEN = ""
@@ -14,11 +13,8 @@ DATA_FILE = "/data/employees.json"
 GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
-
-
+HISTORY_FILE = "/data/history.json"
 SOURCE_JS_FILE = "/employee-card.js"
-WWW_DIR = "/config/www"
-DEST_JS_FILE = os.path.join(WWW_DIR, "employee-card.js")
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
@@ -46,7 +42,7 @@ HEADERS = {
 
 app = Flask(__name__)
 
-# --- KONFIGURACJA SENSORÓW (bez zmian) ---
+# --- KONFIGURACJA SENSORÓW ---
 SUFFIXES_TO_CLEAN = [
     "_status", "_czas_pracy", 
     "_temperatura", "_wilgotnosc", "_cisnienie", 
@@ -54,7 +50,7 @@ SUFFIXES_TO_CLEAN = [
     "_bateria", "_pm25", "_jasnosc"
 ]
 GLOBAL_BLACKLIST = [
-    "indicator", "light", "led", "display",    
+    "indicator", "light", "led", "display",   
     "lock", "child", "physical control",     
     "filter", "life", "used time",           
     "alarm", "error", "fault", "problem",     
@@ -79,6 +75,10 @@ PRETTY_NAMES = {
 }
 BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo.", "button.", "input_"]
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
+
+
+
+
 
 # --- FUNKCJE POMOCNICZE ---
 def load_json(file_path):
@@ -113,14 +113,22 @@ def get_clean_sensors():
                 device_class = attrs.get("device_class")
                 
                 if not (eid.startswith(("sensor.", "binary_sensor.", "switch.", "light."))): continue
-                if attrs.get("managed_by") == "employee_manager": continue
-                if eid.endswith("_status") or eid.endswith("_czas_pracy"): continue
-                if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST): continue
+
+                if attrs.get("managed_by") == "employee_manager":
+                    continue
+
+                if eid.endswith("_status") or eid.endswith("_czas_pracy"):
+                    continue
+
+                if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST):
+                    continue
+
                 if any(eid.startswith(p) for p in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
                 if " - " in friendly_name and "status" in friendly_name: continue 
 
                 unit = attrs.get("unit_of_measurement", "")
+                
                 orig_friendly_name = attrs.get("friendly_name", eid)
                 main_label = orig_friendly_name
                 
@@ -138,6 +146,7 @@ def get_clean_sensors():
                     "state": entity.get("state", "-"), 
                     "device_class": device_class
                 })
+            
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
     except Exception as e:
         print(f"Błąd API: {e}", flush=True)
@@ -154,372 +163,25 @@ def get_ha_state(entity_id):
     return "-"
 
 def register_lovelace_resource():
-    """Kopiuje plik z add-onu do config/www i rejestruje go."""
-    
-    # 1. Sprawdź czy plik źródłowy istnieje w kontenerze
-    if not os.path.exists(SOURCE_JS_FILE):
-        return False, f"Błąd: Nie znaleziono pliku źródłowego '{SOURCE_JS_FILE}' w kontenerze Add-onu!"
-
-    # 2. Skopiuj plik do /config/www/
-    try:
-        if not os.path.exists(WWW_DIR):
-            os.makedirs(WWW_DIR)
-        
-        # Kopiowanie i nadpisywanie
-        shutil.copy2(SOURCE_JS_FILE, DEST_JS_FILE)
-        print(f"Skopiowano {SOURCE_JS_FILE} do {DEST_JS_FILE}", flush=True)
-    except Exception as e:
-        return False, f"Błąd kopiowania pliku: {str(e)}. Sprawdź uprawnienia do /config."
-
-    # 3. Rejestracja w HA
     CARD_URL = "/local/employee-card.js"
     install_headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
-    
     try:
         url = f"{API_URL}/lovelace/resources"
         get_resp = requests.get(url, headers=install_headers)
-        
         if get_resp.status_code in [401, 403, 404]: return False, "Brak uprawnień API."
-        
         resources = get_resp.json()
         for res in resources:
-            if res['url'] == CARD_URL: return True, "Plik zaktualizowany, zasób już istnieje w HA."
-        
+            if res['url'] == CARD_URL: return True, "Zasób już istnieje!"
         payload = {"url": CARD_URL, "type": "module"}
         post_resp = requests.post(url, headers=install_headers, json=payload)
-        
-        if post_resp.status_code in [200, 201]: return True, "Sukces! Skopiowano plik i dodano kartę."
-        else: return False, f"Błąd rejestracji w API: {post_resp.text}"
+        if post_resp.status_code in [200, 201]: return True, "Dodano kartę!"
+        else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
-# --- INTERFEJS HTML ---
-HTML_PAGE = """
-<!DOCTYPE html>
-<html lang="pl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Employee Manager</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/@mdi/font/css/materialdesignicons.min.css" rel="stylesheet">
-    <style>
-        body { background-color: #f8f9fa; padding: 20px; font-family: 'Segoe UI', sans-serif; }
-        .sensor-tile { cursor: pointer; transition: all 0.2s; border: 1px solid #dee2e6; background: white; position: relative; overflow: hidden; }
-        .sensor-tile:hover { background-color: #f1f3f5; border-color: #adb5bd; }
-        .sensor-tile.selected { border-color: #0d6efd; background-color: #e7f1ff; box-shadow: 0 0 0 1px #0d6efd; }
-        .tile-header { font-weight: bold; color: #333; font-size: 0.95rem; }
-        .tile-sub { font-size: 0.75rem; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .tile-val { font-size: 0.85rem; font-weight: 600; color: #0d6efd; margin-left: auto; }
-        .group-filters { overflow-x: auto; white-space: nowrap; padding-bottom: 10px; }
-        .group-btn { border-radius: 20px; padding: 5px 15px; border: 1px solid #dee2e6; background: white; margin-right: 5px; color: #555; transition:0.2s; cursor: pointer; }
-        .group-btn:hover { background: #e9ecef; }
-        .group-btn.active { background: #0d6efd; color: white; border-color: #0d6efd; }
-    </style>
-</head>
-<body>
-
-<div class="container" style="max-width: 1000px;">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3 class="fw-bold text-primary"><i class="mdi mdi-account-group"></i> Employee Manager</h3>
-        <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
-            <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill" data-bs-target="#pills-monitor">Monitor</button></li>
-            <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill" data-bs-target="#pills-config">Konfiguracja</button></li>
-            <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install" onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj Kartę</button></li>
-        </ul>
-    </div>
-
-    <div class="tab-content">
-        <div class="tab-pane fade show active" id="pills-monitor">
-            <div class="d-flex justify-content-between mb-3">
-                <div class="group-filters d-flex" id="monitorFilters"></div>
-                <a href="download_report" target="_blank" class="btn btn-outline-dark btn-sm" style="white-space:nowrap"><i class="mdi mdi-file-excel"></i> Pobierz Historię</a>
-            </div>
-            <div class="row g-3" id="dashboard-grid"></div>
-        </div>
-
-        <div class="tab-pane fade" id="pills-config">
-            <div class="row">
-                <div class="col-lg-7">
-                    <div class="card shadow-sm mb-4">
-                        <div class="card-header bg-white fw-bold">Dodaj / Edytuj</div>
-                        <div class="card-body">
-                            <form id="addForm">
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold">Imię i Nazwisko</label>
-                                    <input type="text" class="form-control" id="empName" required placeholder="np. Jan Kowalski">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold">Grupa (Dział)</label>
-                                    <select class="form-select" id="empGroup">
-                                        <option value="Domyślna">Domyślna</option>
-                                    </select>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold d-flex justify-content-between">
-                                        <span>Przypisz Czujniki</span>
-                                        <span class="badge bg-light text-dark fw-normal border" id="count-badge">0 wybranych</span>
-                                    </label>
-                                    <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch" placeholder="🔍 Filtruj...">
-                                    
-                                    <div class="sensor-list-container border rounded p-2 bg-light" style="max-height: 400px; overflow-y: auto;">
-                                        <div id="sensorList" class="d-flex flex-column gap-2">
-                                            <div class="text-center text-muted p-3">Ładowanie...</div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <button type="submit" class="btn btn-primary w-100">Zapisz Pracownika</button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-5">
-                    <div class="card shadow-sm">
-                        <div class="card-header bg-white fw-bold">Lista Pracowników</div>
-                        <div class="card-body p-0">
-                            <table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr><th>Imię</th><th>Liczba</th><th></th></tr></thead><tbody id="configTable"></tbody></table>
-                        </div>
-                    </div>
-                    
-                    <div class="card shadow-sm mt-3">
-                        <div class="card-header bg-white fw-bold">Grupy</div>
-                        <div class="card-body">
-                            <form id="groupForm" class="mb-3">
-                                <div class="input-group">
-                                    <input type="text" class="form-control" id="newGroup" placeholder="Nowa grupa..." required>
-                                    <button class="btn btn-success">Dodaj</button>
-                                </div>
-                            </form>
-                            <ul class="list-group" id="groupList"></ul>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal fade" id="installModal" tabindex="-1">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      <div class="modal-header bg-light">
-        <h5 class="modal-title">Instalacja Karty Lovelace</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <p>Aby użyć karty na pulpicie:</p>
-        <ol>
-            <li>Skopiuj link poniżej.</li>
-            <li>Kliknij <b>Otwórz Ustawienia</b>.</li>
-            <li>Dodaj zasób, wklej link i wybierz <b>Moduł JavaScript</b>.</li>
-        </ol>
-        <div class="input-group mb-3">
-            <input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput" readonly>
-            <button class="btn btn-outline-primary" id="btn-copy" onclick="copyLink()">Kopiuj</button>
-        </div>
-        <a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100">Otwórz Ustawienia</a>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-    const ALL_SENSORS = {{ all_sensors | tojson }};
-    const chkContainer = document.getElementById('sensorList');
-    const countBadge = document.getElementById('count-badge');
-    const installModal = new bootstrap.Modal(document.getElementById('installModal'));
-    
-    let currentFilter = 'Wszyscy';
-    let allEmployeesData = [];
-    let currentGroups = [];
-
-    function updateCount() { 
-        const count = document.querySelectorAll('#sensorList input:checked').length;
-        countBadge.innerText = count + " wybranych";
-    }
-
-    function copyLink() {
-        const copyText = document.getElementById("linkInput");
-        const btn = document.getElementById("btn-copy");
-        copyText.select();
-        copyText.setSelectionRange(0, 99999);
-        try {
-            document.execCommand('copy'); 
-            const originalHtml = btn.innerHTML;
-            btn.innerHTML = 'Skopiowano!';
-            btn.classList.replace('btn-outline-primary', 'btn-success');
-            setTimeout(() => {
-                btn.innerHTML = originalHtml;
-                btn.classList.replace('btn-success', 'btn-outline-primary');
-            }, 2000);
-        } catch (err) {}
-    }
-
-    async function installCard() {
-        const btn = document.getElementById('tab-install');
-        const originalText = btn.innerHTML; btn.innerHTML = '⏳ ...';
-        try {
-            const res = await fetch('api/install_card', { method: 'POST' });
-            const data = await res.json();
-            if(data.success) alert("SUKCES! " + data.message + "\\n\\nOdśwież stronę (Ctrl+F5)!");
-            else {
-                alert("Błąd: " + data.message);
-                installModal.show();
-            }
-        } catch (e) { installModal.show(); }
-        btn.innerHTML = originalText;
-    }
-
-    function renderSensorList(filterText = "") {
-        chkContainer.innerHTML = "";
-        if (!ALL_SENSORS || ALL_SENSORS.length === 0) { chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów.</div>'; return; }
-
-        ALL_SENSORS.forEach(s => {
-            const searchStr = (s.name + s.id + s.main_label).toLowerCase();
-            if (filterText && !searchStr.includes(filterText.toLowerCase())) return;
-
-            const div = document.createElement('div');
-            div.className = 'sensor-tile rounded p-2 d-flex align-items-center';
-            let icon = "mdi-eye-circle-outline";
-            if (s.main_label === "Temperatura") icon = "mdi-thermometer";
-            else if (s.main_label === "Wilgotność") icon = "mdi-water-percent";
-            else if (s.main_label === "Ciśnienie") icon = "mdi-gauge";
-            else if (s.main_label === "Moc") icon = "mdi-lightning-bolt";
-            else if (s.main_label === "Bateria") icon = "mdi-battery";
-
-            div.innerHTML = `
-                <div class="me-3 d-flex align-items-center justify-content-center bg-light rounded-circle" style="width:36px; height:36px;">
-                    <i class="mdi ${icon} fs-5 text-secondary"></i>
-                </div>
-                <div style="flex: 1; min-width: 0;">
-                    <div class="tile-header text-truncate">${s.main_label}</div>
-                    <div class="tile-sub text-truncate" title="${s.sub_label}">${s.sub_label}</div>
-                </div>
-                <div class="tile-val">${s.state} <span style="font-size:0.7em">${s.unit}</span></div>
-                <input class="form-check-input d-none" type="checkbox" value="${s.id}" id="chk_${s.id}">
-            `;
-            div.addEventListener('click', (e) => {
-                const chk = div.querySelector('input');
-                chk.checked = !chk.checked;
-                if(chk.checked) div.classList.add('selected'); else div.classList.remove('selected');
-                updateCount();
-            });
-            chkContainer.appendChild(div);
-        });
-    }
-
-    document.getElementById('sensorSearch').addEventListener('input', (e) => renderSensorList(e.target.value));
-
-    async function loadGroups() {
-        const res = await fetch('api/groups');
-        currentGroups = await res.json();
-        
-        document.getElementById('groupList').innerHTML = currentGroups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
-        
-        document.getElementById('empGroup').innerHTML = currentGroups.map(g => `<option value="${g}">${g}</option>`).join('');
-        
-        renderFilterBar();
-    }
-
-    function renderFilterBar() {
-        const filters = document.getElementById('monitorFilters');
-        let html = `<button class="group-btn ${currentFilter==='Wszyscy'?'active':''}" onclick="filterMonitor('Wszyscy')">Wszyscy</button>`;
-        currentGroups.forEach(g => {
-            if(g !== 'Domyślna') html += `<button class="group-btn ${currentFilter===g?'active':''}" onclick="filterMonitor('${g}')">${g}</button>`;
-        });
-        filters.innerHTML = html;
-    }
-    
-    document.getElementById('groupForm').onsubmit = async (e) => {
-        e.preventDefault();
-        await fetch('api/groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: document.getElementById('newGroup').value}) });
-        document.getElementById('newGroup').value=''; loadGroups();
-    };
-    
-    window.delGroup = async (n) => { 
-        if(n === 'Domyślna') return alert("Nie można usunąć grupy Domyślna!");
-        if(confirm("Usunąć grupę?")) { await fetch('api/groups/'+n, {method:'DELETE'}); loadGroups(); loadConfig(); refreshMonitorData(); }
-    };
-
-    function filterMonitor(group) {
-        currentFilter = group;
-        renderFilterBar();
-        renderGrid();
-    }
-
-    function renderGrid() {
-        const grid = document.getElementById('dashboard-grid');
-        const filtered = currentFilter === 'Wszyscy' ? allEmployeesData : allEmployeesData.filter(e => e.group === currentFilter);
-        
-        if(filtered.length === 0) { grid.innerHTML = '<p class="text-center mt-5 text-muted">Brak pracowników w tej grupie.</p>'; return; }
-        
-        grid.innerHTML = filtered.map(emp => `
-            <div class="col-md-6 col-xl-4">
-                <div class="card h-100">
-                    <div class="card-body">
-                        <div class="d-flex align-items-center mb-3">
-                            <div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
-                            <div>
-                                <h5 class="mb-0 fw-bold">${emp.name}</h5>
-                                <small class="${emp.status=='Pracuje'?'text-success': 'text-muted'}">● ${emp.status}</small>
-                                <span class="badge bg-light text-dark border ms-2">${emp.group || 'Domyślna'}</span>
-                            </div>
-                            <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div>
-                        </div>
-                        <div class="row g-2">${emp.measurements.map(m => 
-                            `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`
-                        ).join('')}</div>
-                    </div>
-                </div>
-            </div>`).join('');
-    }
-
-    async function refreshMonitorData() {
-        if (!document.getElementById('tab-monitor').classList.contains('active')) return;
-        const res = await fetch('api/monitor');
-        allEmployeesData = await res.json();
-        renderGrid();
-    }
-
-    async function loadConfig() {
-        const res = await fetch('api/employees');
-        const data = await res.json();
-        document.getElementById('configTable').innerHTML = data.map((emp, i) => `
-            <tr><td><strong>${emp.name}</strong><br><span class="badge bg-secondary">${emp.group || 'Domyślna'}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
-        `).join('');
-    }
-
-    document.getElementById('addForm').onsubmit = async (e) => {
-        e.preventDefault();
-        const name = document.getElementById('empName').value;
-        const group = document.getElementById('empGroup').value;
-        const selected = [];
-        document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
-        
-        if(selected.length === 0) {
-            alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
-            return;
-        }
-
-        await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: group, sensors: selected}) });
-        document.getElementById('empName').value = '';
-        renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
-    };
-
-    window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitorData(); } }
-
-    renderSensorList(); loadGroups(); loadConfig(); refreshMonitorData(); setInterval(refreshMonitorData, 3000);
-</script>
-</body>
-</html>
-"""
-
 # --- ENDPOINTY FLASK ---
-
 @app.route('/')
 def index():
-    return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
+    return render_template('index.html', all_sensors=get_clean_sensors())
 
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
@@ -598,13 +260,9 @@ def api_monitor():
         res.append({"name": emp['name'], "group": emp.get('group', 'Domyślna'), "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
 
-@app.route('/api/install_card', methods=['POST'])
-def api_install_card():
-    success, msg = register_lovelace_resource()
-    return jsonify({"success": success, "message": msg})
-
 @app.route('/download_report')
 def download_report():
+    """Generuje raport CSV z bazy danych SQLite"""
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -617,6 +275,7 @@ def download_report():
         cw.writerow(["Data", "Pracownik", "Minuty", "Godziny (ok.)"])
         
         for row in rows:
+            # row[0]=Date, row[1]=Name, row[2]=Minutes
             hours = round(row[2] / 60, 2)
             cw.writerow([row[0], row[1], row[2], str(hours).replace('.', ',')])
             
@@ -624,6 +283,22 @@ def download_report():
     except Exception as e:
         return f"Błąd generowania raportu: {e}", 500
 
+@app.route('/api/install_card', methods=['POST'])
+def api_install_card():
+    success, msg = register_lovelace_resource()
+    return jsonify({"success": success, "message": msg})
 
+@app.route('/local/employee-card.js')
+def serve_card_file():
+    if os.path.exists(CARD_FILE_PATH):
+        return send_file(CARD_FILE_PATH, mimetype='application/javascript')
+    else:
+        return f"Błąd: Nie znaleziono pliku {CARD_FILE_PATH}", 404
+
+@app.route('/api/history', methods=['GET'])
+def api_history():
+    return jsonify(load_json(HISTORY_FILE))
+    
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+

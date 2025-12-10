@@ -17,6 +17,7 @@ COPY employee_logic.py /
 COPY web_server.py /
 COPY employee_map.py /
 COPY employee-card.js /
+COPY templates/ /templates/
 
 RUN chmod a+x /run.sh
 

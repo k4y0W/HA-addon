@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Employee Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font/css/materialdesignicons.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding: 20px;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        .sensor-tile {
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid #dee2e6;
+            background: white;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .sensor-tile:hover {
+            background-color: #f1f3f5;
+            border-color: #adb5bd;
+        }
+
+        .sensor-tile.selected {
+            border-color: #0d6efd;
+            background-color: #e7f1ff;
+            box-shadow: 0 0 0 1px #0d6efd;
+        }
+
+        .tile-header {
+            font-weight: bold;
+            color: #333;
+            font-size: 0.95rem;
+        }
+
+        .tile-sub {
+            font-size: 0.75rem;
+            color: #888;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tile-val {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #0d6efd;
+            margin-left: auto;
+        }
+
+        .group-filters {
+            overflow-x: auto;
+            white-space: nowrap;
+            padding-bottom: 10px;
+        }
+
+        .group-btn {
+            border-radius: 20px;
+            padding: 5px 15px;
+            border: 1px solid #dee2e6;
+            background: white;
+            margin-right: 5px;
+            color: #555;
+            transition: 0.2s;
+            cursor: pointer;
+        }
+
+        .group-btn:hover {
+            background: #e9ecef;
+        }
+
+        .group-btn.active {
+            background: #0d6efd;
+            color: white;
+            border-color: #0d6efd;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container" style="max-width: 1000px;">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h3 class="fw-bold text-primary"><i class="mdi mdi-account-group"></i> Employee Manager</h3>
+            <ul class="nav nav-pills bg-white p-1 rounded shadow-sm">
+                <li class="nav-item"><button class="nav-link active" id="tab-monitor" data-bs-toggle="pill"
+                        data-bs-target="#pills-monitor">Monitor</button></li>
+                <li class="nav-item"><button class="nav-link" id="tab-config" data-bs-toggle="pill"
+                        data-bs-target="#pills-config">Konfiguracja</button></li>
+                <li class="nav-item"><button class="nav-link" id="tab-history" data-bs-toggle="pill"
+                        data-bs-target="#pills-history">Historia</button></li>
+                <li class="nav-item"><button class="nav-link text-success fw-bold" id="tab-install"
+                        onclick="installCard()"><i class="mdi mdi-download"></i> Instaluj Kartę</button></li>
+            </ul>
+        </div>
+
+        <div class="tab-content">
+            <div class="tab-pane fade show active" id="pills-monitor">
+                <div class="d-flex justify-content-between mb-3">
+                    <div class="group-filters d-flex" id="monitorFilters"></div>
+                </div>
+                <div class="row g-3" id="dashboard-grid"></div>
+            </div>
+
+            <div class="tab-pane fade" id="pills-config">
+                <div class="row">
+                    <div class="col-lg-7">
+                        <div class="card shadow-sm mb-4">
+                            <div class="card-header bg-white fw-bold">Dodaj / Edytuj</div>
+                            <div class="card-body">
+                                <form id="addForm">
+                                    <div class="mb-3">
+                                        <label class="form-label fw-bold">Imię i Nazwisko</label>
+                                        <input type="text" class="form-control" id="empName" required
+                                            placeholder="np. Jan Kowalski">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label fw-bold">Grupa (Dział)</label>
+                                        <select class="form-select" id="empGroup">
+                                            <option value="Domyślna">Domyślna</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label fw-bold d-flex justify-content-between">
+                                            <span>Przypisz Czujniki</span>
+                                            <span class="badge bg-light text-dark fw-normal border" id="count-badge">0
+                                                wybranych</span>
+                                        </label>
+                                        <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch"
+                                            placeholder="🔍 Filtruj...">
+
+                                        <div class="sensor-list-container border rounded p-2 bg-light"
+                                            style="max-height: 400px; overflow-y: auto;">
+                                            <div id="sensorList" class="d-flex flex-column gap-2">
+                                                <div class="text-center text-muted p-3">Ładowanie...</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary w-100">Zapisz Pracownika</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-5">
+                        <div class="card shadow-sm">
+                            <div class="card-header bg-white fw-bold">Lista Pracowników</div>
+                            <div class="card-body p-0">
+                                <table class="table table-hover mb-0 align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Imię</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="configTable"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="card shadow-sm mt-3">
+                            <div class="card-header bg-white fw-bold">Grupy</div>
+                            <div class="card-body">
+                                <form id="groupForm" class="mb-3">
+                                    <div class="input-group">
+                                        <input type="text" class="form-control" id="newGroup"
+                                            placeholder="Nowa grupa..." required>
+                                        <button class="btn btn-success">Dodaj</button>
+                                    </div>
+                                </form>
+                                <ul class="list-group" id="groupList"></ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="pills-history">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                        <span>Baza Raportów</span>
+                        <button class="btn btn-sm btn-primary" onclick="loadHistory()"><i class="mdi mdi-refresh"></i>
+                            Odśwież</button>
+                    </div>
+                    <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
+                        <div id="history-container">Ładowanie...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="installModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title">Instalacja Karty Lovelace</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Aby użyć karty na pulpicie:</p>
+                    <ol>
+                        <li>Skopiuj link poniżej.</li>
+                        <li>Kliknij <b>Otwórz Ustawienia</b>.</li>
+                        <li>Dodaj zasób, wklej link i wybierz <b>Moduł JavaScript</b>.</li>
+                    </ol>
+                    <div class="input-group mb-3">
+                        <input type="text" class="form-control bg-light" value="/local/employee-card.js" id="linkInput"
+                            readonly>
+                        <button class="btn btn-outline-primary" id="btn-copy" onclick="copyLink()">Kopiuj</button>
+                    </div>
+                    <a href="/config/lovelace/resources" target="_blank" class="btn btn-success w-100">Otwórz
+                        Ustawienia</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // DANE Z FLASKA
+        const ALL_SENSORS = {{ all_sensors | tojson }};
+
+        // ELEMENTY DOM
+        const chkContainer = document.getElementById('sensorList');
+        const countBadge = document.getElementById('count-badge');
+        const installModal = new bootstrap.Modal(document.getElementById('installModal'));
+
+        let currentFilter = 'Wszyscy';
+        let allEmployeesData = [];
+        let currentGroups = [];
+
+        // --- FUNKCJE POMOCNICZE ---
+        function updateCount() {
+            if (!chkContainer) return;
+            const count = chkContainer.querySelectorAll('input:checked').length;
+            if (countBadge) countBadge.innerText = count + " wybranych";
+        }
+
+        function copyLink() {
+            const copyText = document.getElementById("linkInput");
+            const btn = document.getElementById("btn-copy");
+            copyText.select();
+            copyText.setSelectionRange(0, 99999);
+            try {
+                document.execCommand('copy');
+                const originalHtml = btn.innerHTML;
+                btn.innerHTML = 'Skopiowano!';
+                btn.classList.replace('btn-outline-primary', 'btn-success');
+                setTimeout(() => {
+                    btn.innerHTML = originalHtml;
+                    btn.classList.replace('btn-success', 'btn-outline-primary');
+                }, 2000);
+            } catch (err) { }
+        }
+
+        async function installCard() {
+            const btn = document.getElementById('tab-install');
+            const originalText = btn.innerHTML; btn.innerHTML = '⏳ ...';
+            try {
+                const res = await fetch('api/install_card', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) alert("SUKCES! " + data.message + "\\n\\nOdśwież stronę (Ctrl+F5)!");
+                else installModal.show();
+            } catch (e) { installModal.show(); }
+            btn.innerHTML = originalText;
+        }
+
+        // --- RENDEROWANIE LISTY SENSORÓW ---
+        function renderSensorList(filterText = "") {
+            if (!chkContainer) return;
+            chkContainer.innerHTML = "";
+
+            if (!ALL_SENSORS || ALL_SENSORS.length === 0) {
+                chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów (lub błąd połączenia z HA).</div>';
+                return;
+            }
+
+            ALL_SENSORS.forEach(s => {
+                const searchStr = (s.name + s.id + s.main_label).toLowerCase();
+                if (filterText && !searchStr.includes(filterText.toLowerCase())) return;
+
+                const div = document.createElement('div');
+                div.className = 'sensor-tile rounded p-2 d-flex align-items-center';
+                let icon = "mdi-eye-circle-outline";
+                if (s.main_label === "Temperatura") icon = "mdi-thermometer";
+                else if (s.main_label === "Wilgotność") icon = "mdi-water-percent";
+                else if (s.main_label === "Ciśnienie") icon = "mdi-gauge";
+                else if (s.main_label === "Moc") icon = "mdi-lightning-bolt";
+                else if (s.main_label === "Bateria") icon = "mdi-battery";
+
+                div.innerHTML = `
+                <div class="me-3 d-flex align-items-center justify-content-center bg-light rounded-circle" style="width:36px; height:36px;">
+                    <i class="mdi ${icon} fs-5 text-secondary"></i>
+                </div>
+                <div style="flex: 1; min-width: 0;">
+                    <div class="tile-header text-truncate">${s.main_label}</div>
+                    <div class="tile-sub text-truncate" title="${s.sub_label}">${s.sub_label}</div>
+                </div>
+                <div class="tile-val">${s.state} <span style="font-size:0.7em">${s.unit}</span></div>
+                <input class="form-check-input d-none" type="checkbox" value="${s.id}" id="chk_${s.id}">
+            `;
+                div.addEventListener('click', (e) => {
+                    const chk = div.querySelector('input');
+                    chk.checked = !chk.checked;
+                    if (chk.checked) div.classList.add('selected'); else div.classList.remove('selected');
+                    updateCount();
+                });
+                chkContainer.appendChild(div);
+            });
+        }
+
+        // Listener do wyszukiwarki (z zabezpieczeniem ?)
+        document.getElementById('sensorSearch')?.addEventListener('input', (e) => renderSensorList(e.target.value));
+
+        // --- GRUPY ---
+        async function loadGroups() {
+            const res = await fetch('api/groups');
+            currentGroups = await res.json();
+
+            const listEl = document.getElementById('groupList');
+            if (listEl) {
+                listEl.innerHTML = currentGroups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
+            }
+
+            const selectEl = document.getElementById('empGroup');
+            if (selectEl) {
+                selectEl.innerHTML = currentGroups.map(g => `<option value="${g}">${g}</option>`).join('');
+            }
+
+            renderFilterBar();
+        }
+
+        function renderFilterBar() {
+            const filters = document.getElementById('monitorFilters');
+            if (!filters) return;
+
+            let html = `<button class="group-btn ${currentFilter === 'Wszyscy' ? 'active' : ''}" onclick="filterMonitor('Wszyscy')">Wszyscy</button>`;
+            currentGroups.forEach(g => {
+                if (g !== 'Domyślna') html += `<button class="group-btn ${currentFilter === g ? 'active' : ''}" onclick="filterMonitor('${g}')">${g}</button>`;
+            });
+            filters.innerHTML = html;
+        }
+
+        // Obsługa formularza grup
+        const groupForm = document.getElementById('groupForm');
+        if (groupForm) {
+            groupForm.onsubmit = async (e) => {
+                e.preventDefault();
+                await fetch('api/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: document.getElementById('newGroup').value }) });
+                document.getElementById('newGroup').value = ''; loadGroups();
+            };
+        }
+
+        window.delGroup = async (n) => {
+            if (n === 'Domyślna') return alert("Nie można usunąć grupy Domyślna!");
+            if (confirm("Usunąć grupę?")) { await fetch('api/groups/' + n, { method: 'DELETE' }); loadGroups(); loadConfig(); refreshMonitorData(); }
+        };
+
+        // --- MONITOR ---
+        function filterMonitor(group) {
+            currentFilter = group;
+            renderFilterBar();
+            renderGrid();
+        }
+
+        function renderGrid() {
+            const grid = document.getElementById('dashboard-grid');
+            if (!grid) return;
+
+            const filtered = currentFilter === 'Wszyscy' ? allEmployeesData : allEmployeesData.filter(e => e.group === currentFilter);
+
+            if (filtered.length === 0) { grid.innerHTML = '<p class="text-center mt-5 text-muted">Brak pracowników w tej grupie.</p>'; return; }
+
+            grid.innerHTML = filtered.map(emp => `
+            <div class="col-md-6 col-xl-4">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="bg-light p-3 rounded-circle me-3"><i class="mdi mdi-account fs-3"></i></div>
+                            <div>
+                                <h5 class="mb-0 fw-bold">${emp.name}</h5>
+                                <small class="${emp.status == 'Pracuje' ? 'text-success' : 'text-muted'}">● ${emp.status}</small>
+                                <span class="badge bg-light text-dark border ms-2">${emp.group || 'Domyślna'}</span>
+                            </div>
+                            <div class="ms-auto text-end"><div class="fs-4 fw-bold">${emp.work_time}</div><div class="small text-muted" style="font-size:0.7em">MIN</div></div>
+                        </div>
+                        <div class="row g-2">${emp.measurements.map(m =>
+                `<div class="col-6"><div class="p-2 border rounded bg-light text-center"><small class="text-muted d-block text-truncate">${m.label}</small><strong>${m.value} ${m.unit}</strong></div></div>`
+            ).join('')}</div>
+                    </div>
+                </div>
+            </div>`).join('');
+        }
+
+        async function refreshMonitorData() {
+            // Odświeżaj tylko jeśli zakładka Monitor jest aktywna
+            if (!document.getElementById('tab-monitor')?.classList.contains('active')) return;
+
+            const res = await fetch('api/monitor');
+            allEmployeesData = await res.json();
+            renderGrid();
+        }
+
+        async function loadConfig() {
+            const res = await fetch('api/employees');
+            const data = await res.json();
+            const table = document.getElementById('configTable');
+            if (table) {
+                table.innerHTML = data.map((emp, i) => `
+                <tr><td><strong>${emp.name}</strong><br><span class="badge bg-secondary">${emp.group || 'Domyślna'}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
+            `).join('');
+            }
+        }
+
+        const addForm = document.getElementById('addForm');
+        if (addForm) {
+            addForm.onsubmit = async (e) => {
+                e.preventDefault();
+                const name = document.getElementById('empName').value;
+                const group = document.getElementById('empGroup').value;
+                const selected = [];
+
+                if (chkContainer) {
+                    chkContainer.querySelectorAll('input:checked').forEach(c => selected.push(c.value));
+                }
+
+                if (selected.length === 0) {
+                    alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
+                    return;
+                }
+
+                await fetch('api/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name, group: group, sensors: selected }) });
+                document.getElementById('empName').value = '';
+                renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
+            };
+        }
+
+        window.del = async (i) => { if (confirm("Usunąć?")) { await fetch('api/employees/' + i, { method: 'DELETE' }); loadConfig(); refreshMonitorData(); } }
+
+        // --- HISTORIA ---
+        async function loadHistory() {
+            const container = document.getElementById('history-container');
+            if (!container) return;
+
+            container.innerHTML = '<div class="p-4 text-center">Pobieranie danych...</div>';
+            try {
+                const res = await fetch('api/history');
+                const data = await res.json();
+
+                if (!data || data.length === 0) {
+                    container.innerHTML = '<div class="p-4 text-center text-muted">Brak raportów w bazie.</div>';
+                    return;
+                }
+
+                let html = '';
+                data.forEach(report => {
+                    html += `
+                <div class="border-bottom p-3">
+                    <div class="d-flex justify-content-between mb-2">
+                        <strong class="text-primary fs-5">${report.date}</strong>
+                        <span class="badge bg-secondary">ID: ${report.id}</span>
+                    </div>
+                    <table class="table table-sm table-bordered mb-0">
+                        <thead class="table-light">
+                            <tr><th>Pracownik</th><th>Grupa</th><th>Status</th><th>Czas pracy</th></tr>
+                        </thead>
+                        <tbody>
+                            ${report.entries.map(e => `
+                                <tr>
+                                    <td>${e.name}</td>
+                                    <td><small>${e.group}</small></td>
+                                    <td class="${e.status === 'Pracuje' ? 'text-success fw-bold' : ''}">${e.status}</td>
+                                    <td>${e.work_time} min</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+                });
+                container.innerHTML = html;
+            } catch (e) {
+                container.innerHTML = '<div class="p-4 text-danger">Błąd ładowania historii.</div>';
+            }
+        }
+
+        // Listener do Historii (z zabezpieczeniem ?)
+        document.getElementById('tab-history')?.addEventListener('shown.bs.tab', loadHistory);
+
+        // --- INICJALIZACJA ---
+        renderSensorList();
+        loadGroups();
+        loadConfig();
+        refreshMonitorData();
+        setInterval(refreshMonitorData, 3000);
+    </script>
+</body>
+
+</html>
