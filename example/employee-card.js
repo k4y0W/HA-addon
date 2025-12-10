@@ -6,8 +6,8 @@ const KNOWN_SENSOR_TYPES = [
   { suffix: 'napiecie', icon: 'mdi:sine-wave', unit: 'V' },
   { suffix: 'natezenie', icon: 'mdi:current-ac', unit: 'A' },
   { suffix: 'bateria', icon: 'mdi:battery', unit: '%' },
-  { suffix: 'pm25', icon: 'mdi:blur', unit: 'μg/m3' },
-  { suffix: 'pm25_density', icon: 'mdi:blur', unit: 'μg/m3' }
+  { suffix: 'pm25', icon: 'mdi:blur', unit: 'ug/m3' },
+  { suffix: 'pm25_density', icon: 'mdi:blur', unit: 'ug/m3' }
 ];
 
 const SHARED_STYLES = `

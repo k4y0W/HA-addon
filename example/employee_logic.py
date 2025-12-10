@@ -80,7 +80,7 @@ UNIT_MAP = {
     "°C": {"suffix": "temperatura", "icon": "mdi:thermometer"},
     "%": {"suffix": "wilgotnosc", "icon": "mdi:water-percent"},
     "hPa": {"suffix": "cisnienie", "icon": "mdi:gauge"},
-    "µg/m³": {"suffix": "pm25", "icon": "mdi:blur"},
+    "ug/m³": {"suffix": "pm25", "icon": "mdi:blur"},
 }
 
 MANAGED_SUFFIXES = [
@@ -115,7 +115,12 @@ def get_state_full(entity_id):
     return None
 
 def set_state(entity_id, state, friendly, icon, group, unit=None):
-    attrs = {"friendly_name": friendly, "icon": icon, "group": group}
+    attrs = {
+        "friendly_name": friendly, 
+        "icon": icon, 
+        "group": group, 
+        "managed_by": "employee_manager"
+    }
     if unit: attrs["unit_of_measurement"] = unit
     try:
         requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json={"state": str(state), "attributes": attrs})

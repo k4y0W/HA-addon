@@ -44,6 +44,14 @@ app = Flask(__name__)
 SUFFIXES_TO_CLEAN = [
     "_status", "_czas_pracy","Iphone"
 ]
+GLOBAL_BLACKLIST = [
+    "indicator", "light", "led", "display",   
+    "lock", "child", "physical control",     
+    "filter", "life", "used time",           
+    "alarm", "error", "fault", "problem",     
+    "update", "install", "version",           
+    "identify", "zidentyfikuj", "info",       
+]
 
 BLOCKED_KEYWORDS = [
     "App Version", "Audio Output", "BSSID", "SSID", "Connection Type", 
@@ -58,8 +66,8 @@ PRETTY_NAMES = {
     "battery": "Bateria", "signal_strength": "Sygnał", "pm25": "PM 2.5", "illuminance": "Jasność",
     "connectivity": "Połączenie"
 }
-BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo."]
-BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date"]
+BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo.", "button.", "input_"]
+BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
 GENERATED_SUFFIXES = SUFFIXES_TO_CLEAN
 
 
@@ -94,40 +102,57 @@ def get_clean_sensors():
             for entity in all_states:
                 eid = entity['entity_id']
                 attrs = entity.get("attributes", {})
-                friendly_name = attrs.get("friendly_name", eid)
+                friendly_name = attrs.get("friendly_name", eid).lower()
                 device_class = attrs.get("device_class")
                 
-                if not (eid.startswith("sensor.") or eid.startswith("binary_sensor.") or eid.startswith("switch.") or eid.startswith("light.")): continue
-                
-                is_virtual = False
-                for suffix in GENERATED_SUFFIXES:
-                    if eid.endswith(suffix): is_virtual = True; break
-                if is_virtual: continue
+                # 1. Sprawdź domenę
+                if not (eid.startswith(("sensor.", "binary_sensor.", "switch.", "light."))): continue
 
-                if any(junk in friendly_name for junk in BLOCKED_KEYWORDS): continue
+                # 2. SPOSÓB SPRYTNY: Sprawdź atrybut 'managed_by'
+                # Jeśli sensor został stworzony przez employeelogic.py, ma ten atrybut.
+                # Dzięki temu ukrywamy WSZYSTKIE duplikaty (Jd, Mareczek, Zygmunt) bez wpisywania imion.
+                if attrs.get("managed_by") == "employee_manager":
+                    continue
 
-                # Filtr 4: Reszta techniczna
-                if " - " in friendly_name: continue
-                if any(eid.startswith(prefix) for prefix in BLOCKED_PREFIXES): continue
+                # 3. Zabezpieczenie wsteczne (zanim skrypt logic nadpisze atrybuty)
+                # Sprawdza czy końcówka jest typowa dla tego dodatku
+                if any(eid.endswith(s) for s in SUFFIXES_TO_CLEAN):
+                    # Dodatkowe sprawdzenie, czy to nie jest prawdziwy sensor przypadkiem
+                    # Zakładamy, że prawdziwe sensory rzadko mają nazwy typu "mareczek_status"
+                    if "_status" in eid or "_czas_pracy" in eid: continue
+
+                # 4. Filtrowanie technicznych śmieci (Global Blacklist)
+                # Szuka słów "indicator", "filter", "lock" w nazwie przyjaznej
+                if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST):
+                    continue
+
+                # 5. Standardowe blokady systemowe HA
+                if any(eid.startswith(p) for p in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
-                if "scene_history" in eid or "message" in eid: continue
+                if " - " in friendly_name and "status" in friendly_name: continue # Częsty wzorzec statusów systemowych
 
+                # --- Budowanie obiektu ---
                 unit = attrs.get("unit_of_measurement", "")
-                main_label = friendly_name 
+                main_label = attrs.get("friendly_name", eid)
                 
-                # Nadawanie ładnych nazw (Pretty Names)
                 if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
                 elif unit == "W": main_label = "Moc"
                 elif unit == "V": main_label = "Napięcie"
                 elif unit == "kWh": main_label = "Energia"
-                elif unit == "hPa": main_label = "Ciśnienie"
                 elif unit == "%": main_label = "Wilgotność"
-                elif unit == "lx": main_label = "Jasność"
-                elif "Battery Level" in friendly_name: main_label = "Bateria" # Specjalny wyjątek dla iPhone
                 
-                sensors.append({"id": eid, "main_label": main_label, "sub_label": friendly_name, "unit": unit, "state": entity.get("state", "-"), "device_class": device_class})
+                sensors.append({
+                    "id": eid, 
+                    "main_label": main_label, 
+                    "sub_label": attrs.get("friendly_name", eid), # Oryginalna nazwa
+                    "unit": unit, 
+                    "state": entity.get("state", "-"), 
+                    "device_class": device_class
+                })
+            
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
-    except: pass
+    except Exception as e:
+        print(f"Błąd: {e}", flush=True)
     return sensors
 
 def get_ha_state(entity_id):
