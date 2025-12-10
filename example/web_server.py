@@ -5,7 +5,7 @@ import csv
 import io
 import sqlite3
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string, Response, send_file
+from flask import Flask, request, jsonify, render_template, Response, send_file
 
 # --- KONFIGURACJA ---
 HARDCODED_TOKEN = ""
