@@ -214,28 +214,84 @@ HTML_PAGE = """
         </ul>
     </div>
 
-<div class="tab-content">
-    <div class="tab-pane fade show active" id="pills-monitor">
-        <div class="d-flex justify-content-between mb-3">
-            <div class="group-filters d-flex" id="monitorFilters"></div>
+    <div class="tab-content">
+        <div class="tab-pane fade show active" id="pills-monitor">
+            <div class="d-flex justify-content-between mb-3">
+                <div class="group-filters d-flex" id="monitorFilters"></div>
             </div>
-        <div class="row g-3" id="dashboard-grid"></div>
-    </div>
+            <div class="row g-3" id="dashboard-grid"></div>
+        </div>
 
-    <div class="tab-pane fade" id="pills-history">
-        <div class="card shadow-sm">
-            <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
-                <span>Baza Raportów</span>
-                <button class="btn btn-sm btn-primary" onclick="loadHistory()"><i class="mdi mdi-refresh"></i> Odśwież</button>
-            </div>
-            <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
-                <div id="history-container">Ładowanie...</div>
+        <div class="tab-pane fade" id="pills-config">
+            <div class="row">
+                <div class="col-lg-7">
+                    <div class="card shadow-sm mb-4">
+                        <div class="card-header bg-white fw-bold">Dodaj / Edytuj</div>
+                        <div class="card-body">
+                            <form id="addForm">
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Imię i Nazwisko</label>
+                                    <input type="text" class="form-control" id="empName" required placeholder="np. Jan Kowalski">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Grupa (Dział)</label>
+                                    <select class="form-select" id="empGroup">
+                                        <option value="Domyślna">Domyślna</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold d-flex justify-content-between">
+                                        <span>Przypisz Czujniki</span>
+                                        <span class="badge bg-light text-dark fw-normal border" id="count-badge">0 wybranych</span>
+                                    </label>
+                                    <input type="text" class="form-control form-control-sm mb-2" id="sensorSearch" placeholder="🔍 Filtruj...">
+                                    
+                                    <div class="sensor-list-container border rounded p-2 bg-light" style="max-height: 400px; overflow-y: auto;">
+                                        <div id="sensorList" class="d-flex flex-column gap-2">
+                                            <div class="text-center text-muted p-3">Ładowanie...</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100">Zapisz Pracownika</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-5">
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-white fw-bold">Lista Pracowników</div>
+                        <div class="card-body p-0">
+                            <table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr><th>Imię</th><th></th></tr></thead><tbody id="configTable"></tbody></table>
+                        </div>
+                    </div>
+                    
+                    <div class="card shadow-sm mt-3">
+                        <div class="card-header bg-white fw-bold">Grupy</div>
+                        <div class="card-body">
+                            <form id="groupForm" class="mb-3">
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="newGroup" placeholder="Nowa grupa..." required>
+                                    <button class="btn btn-success">Dodaj</button>
+                                </div>
+                            </form>
+                            <ul class="list-group" id="groupList"></ul>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
 
-    <div class="tab-pane fade" id="pills-config">
-       </div>
+        <div class="tab-pane fade" id="pills-history">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
+                    <span>Baza Raportów</span>
+                    <button class="btn btn-sm btn-primary" onclick="loadHistory()"><i class="mdi mdi-refresh"></i> Odśwież</button>
+                </div>
+                <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
+                    <div id="history-container">Ładowanie...</div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -265,7 +321,10 @@ HTML_PAGE = """
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+    // DANE Z FLASKA
     const ALL_SENSORS = {{ all_sensors | tojson }};
+    
+    // ELEMENTY DOM
     const chkContainer = document.getElementById('sensorList');
     const countBadge = document.getElementById('count-badge');
     const installModal = new bootstrap.Modal(document.getElementById('installModal'));
@@ -274,9 +333,11 @@ HTML_PAGE = """
     let allEmployeesData = [];
     let currentGroups = [];
 
+    // --- FUNKCJE POMOCNICZE ---
     function updateCount() { 
-        const count = document.querySelectorAll('#sensorList input:checked').length;
-        countBadge.innerText = count + " wybranych";
+        if(!chkContainer) return;
+        const count = chkContainer.querySelectorAll('input:checked').length;
+        if(countBadge) countBadge.innerText = count + " wybranych";
     }
 
     function copyLink() {
@@ -308,9 +369,15 @@ HTML_PAGE = """
         btn.innerHTML = originalText;
     }
 
+    // --- RENDEROWANIE LISTY SENSORÓW ---
     function renderSensorList(filterText = "") {
+        if(!chkContainer) return;
         chkContainer.innerHTML = "";
-        if (!ALL_SENSORS || ALL_SENSORS.length === 0) { chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów.</div>'; return; }
+        
+        if (!ALL_SENSORS || ALL_SENSORS.length === 0) { 
+            chkContainer.innerHTML = '<div class="text-center text-danger p-3">Brak sensorów (lub błąd połączenia z HA).</div>'; 
+            return; 
+        }
 
         ALL_SENSORS.forEach(s => {
             const searchStr = (s.name + s.id + s.main_label).toLowerCase();
@@ -346,21 +413,31 @@ HTML_PAGE = """
         });
     }
 
-    document.getElementById('sensorSearch').addEventListener('input', (e) => renderSensorList(e.target.value));
+    // Listener do wyszukiwarki (z zabezpieczeniem ?)
+    document.getElementById('sensorSearch')?.addEventListener('input', (e) => renderSensorList(e.target.value));
 
+    // --- GRUPY ---
     async function loadGroups() {
         const res = await fetch('api/groups');
         currentGroups = await res.json();
         
-        document.getElementById('groupList').innerHTML = currentGroups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
+        const listEl = document.getElementById('groupList');
+        if(listEl) {
+            listEl.innerHTML = currentGroups.map(g => `<li class="list-group-item d-flex justify-content-between">${g} <button class="btn btn-sm btn-outline-danger" onclick="delGroup('${g}')">X</button></li>`).join('');
+        }
         
-        document.getElementById('empGroup').innerHTML = currentGroups.map(g => `<option value="${g}">${g}</option>`).join('');
+        const selectEl = document.getElementById('empGroup');
+        if(selectEl) {
+            selectEl.innerHTML = currentGroups.map(g => `<option value="${g}">${g}</option>`).join('');
+        }
         
         renderFilterBar();
     }
 
     function renderFilterBar() {
         const filters = document.getElementById('monitorFilters');
+        if(!filters) return;
+        
         let html = `<button class="group-btn ${currentFilter==='Wszyscy'?'active':''}" onclick="filterMonitor('Wszyscy')">Wszyscy</button>`;
         currentGroups.forEach(g => {
             if(g !== 'Domyślna') html += `<button class="group-btn ${currentFilter===g?'active':''}" onclick="filterMonitor('${g}')">${g}</button>`;
@@ -368,17 +445,22 @@ HTML_PAGE = """
         filters.innerHTML = html;
     }
     
-    document.getElementById('groupForm').onsubmit = async (e) => {
-        e.preventDefault();
-        await fetch('api/groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: document.getElementById('newGroup').value}) });
-        document.getElementById('newGroup').value=''; loadGroups();
-    };
+    // Obsługa formularza grup
+    const groupForm = document.getElementById('groupForm');
+    if(groupForm) {
+        groupForm.onsubmit = async (e) => {
+            e.preventDefault();
+            await fetch('api/groups', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: document.getElementById('newGroup').value}) });
+            document.getElementById('newGroup').value=''; loadGroups();
+        };
+    }
     
     window.delGroup = async (n) => { 
         if(n === 'Domyślna') return alert("Nie można usunąć grupy Domyślna!");
         if(confirm("Usunąć grupę?")) { await fetch('api/groups/'+n, {method:'DELETE'}); loadGroups(); loadConfig(); refreshMonitorData(); }
     };
 
+    // --- MONITOR ---
     function filterMonitor(group) {
         currentFilter = group;
         renderFilterBar();
@@ -387,6 +469,8 @@ HTML_PAGE = """
 
     function renderGrid() {
         const grid = document.getElementById('dashboard-grid');
+        if(!grid) return;
+        
         const filtered = currentFilter === 'Wszyscy' ? allEmployeesData : allEmployeesData.filter(e => e.group === currentFilter);
         
         if(filtered.length === 0) { grid.innerHTML = '<p class="text-center mt-5 text-muted">Brak pracowników w tej grupie.</p>'; return; }
@@ -413,7 +497,9 @@ HTML_PAGE = """
     }
 
     async function refreshMonitorData() {
-        if (!document.getElementById('tab-monitor').classList.contains('active')) return;
+        // Odświeżaj tylko jeśli zakładka Monitor jest aktywna
+        if (!document.getElementById('tab-monitor')?.classList.contains('active')) return;
+        
         const res = await fetch('api/monitor');
         allEmployeesData = await res.json();
         renderGrid();
@@ -422,31 +508,94 @@ HTML_PAGE = """
     async function loadConfig() {
         const res = await fetch('api/employees');
         const data = await res.json();
-        document.getElementById('configTable').innerHTML = data.map((emp, i) => `
-            <tr><td><strong>${emp.name}</strong><br><span class="badge bg-secondary">${emp.group || 'Domyślna'}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
-        `).join('');
+        const table = document.getElementById('configTable');
+        if(table) {
+            table.innerHTML = data.map((emp, i) => `
+                <tr><td><strong>${emp.name}</strong><br><span class="badge bg-secondary">${emp.group || 'Domyślna'}</span></td><td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="del(${i})">Usuń</button></td></tr>
+            `).join('');
+        }
     }
 
-    document.getElementById('addForm').onsubmit = async (e) => {
-        e.preventDefault();
-        const name = document.getElementById('empName').value;
-        const group = document.getElementById('empGroup').value;
-        const selected = [];
-        document.querySelectorAll('#sensorList input:checked').forEach(c => selected.push(c.value));
-        
-        if(selected.length === 0) {
-            alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
-            return;
-        }
+    const addForm = document.getElementById('addForm');
+    if(addForm) {
+        addForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('empName').value;
+            const group = document.getElementById('empGroup').value;
+            const selected = [];
+            
+            if(chkContainer) {
+                chkContainer.querySelectorAll('input:checked').forEach(c => selected.push(c.value));
+            }
+            
+            if(selected.length === 0) {
+                alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
+                return;
+            }
 
-        await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: group, sensors: selected}) });
-        document.getElementById('empName').value = '';
-        renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
-    };
+            await fetch('api/employees', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, group: group, sensors: selected}) });
+            document.getElementById('empName').value = '';
+            renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
+        };
+    }
 
     window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitorData(); } }
 
-    renderSensorList(); loadGroups(); loadConfig(); refreshMonitorData(); setInterval(refreshMonitorData, 3000);
+    // --- HISTORIA ---
+    async function loadHistory() {
+        const container = document.getElementById('history-container');
+        if(!container) return;
+        
+        container.innerHTML = '<div class="p-4 text-center">Pobieranie danych...</div>';
+        try {
+            const res = await fetch('api/history');
+            const data = await res.json();
+            
+            if(!data || data.length === 0) {
+                container.innerHTML = '<div class="p-4 text-center text-muted">Brak raportów w bazie.</div>';
+                return;
+            }
+
+            let html = '';
+            data.forEach(report => {
+                html += `
+                <div class="border-bottom p-3">
+                    <div class="d-flex justify-content-between mb-2">
+                        <strong class="text-primary fs-5">${report.date}</strong>
+                        <span class="badge bg-secondary">ID: ${report.id}</span>
+                    </div>
+                    <table class="table table-sm table-bordered mb-0">
+                        <thead class="table-light">
+                            <tr><th>Pracownik</th><th>Grupa</th><th>Status</th><th>Czas pracy</th></tr>
+                        </thead>
+                        <tbody>
+                            ${report.entries.map(e => `
+                                <tr>
+                                    <td>${e.name}</td>
+                                    <td><small>${e.group}</small></td>
+                                    <td class="${e.status === 'Pracuje' ? 'text-success fw-bold' : ''}">${e.status}</td>
+                                    <td>${e.work_time} min</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+            });
+            container.innerHTML = html;
+        } catch(e) {
+            container.innerHTML = '<div class="p-4 text-danger">Błąd ładowania historii.</div>';
+        }
+    }
+
+    // Listener do Historii (z zabezpieczeniem ?)
+    document.getElementById('tab-history')?.addEventListener('shown.bs.tab', loadHistory);
+
+    // --- INICJALIZACJA ---
+    renderSensorList(); 
+    loadGroups(); 
+    loadConfig(); 
+    refreshMonitorData(); 
+    setInterval(refreshMonitorData, 3000);
 </script>
 </body>
 </html>
