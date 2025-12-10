@@ -15,10 +15,8 @@ GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
 
-# Ścieżki plików dla karty
-# 1. Źródło: tam gdzie leży skrypt pythona (wewnątrz kontenera Add-onu)
-SOURCE_JS_FILE = "employee-card.js" 
-# 2. Cel: katalog widoczny dla Home Assistanta
+
+SOURCE_JS_FILE = "/employee-card.js"
 WWW_DIR = "/config/www"
 DEST_JS_FILE = os.path.join(WWW_DIR, "employee-card.js")
 
@@ -600,6 +598,11 @@ def api_monitor():
         res.append({"name": emp['name'], "group": emp.get('group', 'Domyślna'), "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
 
+@app.route('/api/install_card', methods=['POST'])
+def api_install_card():
+    success, msg = register_lovelace_resource()
+    return jsonify({"success": success, "message": msg})
+
 @app.route('/download_report')
 def download_report():
     try:
@@ -621,10 +624,6 @@ def download_report():
     except Exception as e:
         return f"Błąd generowania raportu: {e}", 500
 
-@app.route('/api/install_card', methods=['POST'])
-def api_install_card():
-    success, msg = register_lovelace_resource()
-    return jsonify({"success": success, "message": msg})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
