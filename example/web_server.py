@@ -25,15 +25,17 @@ try:
         USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
 except: pass
 
-if len(HARDCODED_TOKEN) > 50:
-    TOKEN = HARDCODED_TOKEN
-    API_URL = "http://homeassistant:8123/api"
-elif len(USER_TOKEN_FROM_FILE) > 50:
-    TOKEN = USER_TOKEN_FROM_FILE
-    API_URL = "http://homeassistant:8123/api"
-else:
+if SUPERVISOR_TOKEN:
+    print(">>> UŻYWAM TOKENA SUPERVISORA (Tryb Wewnętrzny) <<<", flush=True)
     TOKEN = SUPERVISOR_TOKEN
-    API_URL = "http://supervisor/core/api"
+    # Adres wewnętrzny Supervisora
+    API_URL = "http://supervisor/core/api" 
+else:
+    # Fallback (tylko do testów lokalnych poza HA)
+    print(">>> BRAK TOKENA SUPERVISORA - UŻYWAM HARDCODED/PLIKU <<<", flush=True)
+    # ... tu twoja stara logika ...
+    TOKEN = "TWÓJ_TOKEN_LONG_LIVED_JEŚLI_POTRZEBNY"
+    API_URL = "http://homeassistant:8123/api" # To często nie działa wewnątrz kontenera
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
