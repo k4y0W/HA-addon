@@ -19,9 +19,10 @@ SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
 
 try:
-    with open(OPTIONS_FILE, 'r') as f:
-        opts = json.load(f)
-        USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
+    if os.path.exists(OPTIONS_FILE):
+        with open(OPTIONS_FILE, 'r') as f:
+            opts = json.load(f)
+            USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
 except: pass
 
 if len(HARDCODED_TOKEN) > 50:
@@ -29,7 +30,8 @@ if len(HARDCODED_TOKEN) > 50:
     API_URL = "http://homeassistant:8123/api"
 elif len(USER_TOKEN_FROM_FILE) > 50:
     TOKEN = USER_TOKEN_FROM_FILE
-    API_URL = "http://homeassistant:8123/api"
+    # Próba użycia wewnętrznego adresu Docker dla stabilności
+    API_URL = "http://172.30.32.1:8123/api" 
 else:
     TOKEN = SUPERVISOR_TOKEN
     API_URL = "http://supervisor/core/api"
@@ -41,43 +43,276 @@ HEADERS = {
 
 app = Flask(__name__)
 
-# --- KONFIGURACJA SENSORÓW ---
-SUFFIXES_TO_CLEAN = [
-    "_status", "_czas_pracy", 
-    "_temperatura", "_wilgotnosc", "_cisnienie", 
-    "_moc", "_napiecie", "_natezenie", 
-    "_bateria", "_pm25", "_jasnosc"
-]
+# --- CONFIG SENSORÓW ---
+SUFFIXES_TO_CLEAN = ["_status", "_czas_pracy", "_temperatura", "_wilgotnosc", "_cisnienie", "_moc", "_napiecie", "_natezenie", "_bateria", "_pm25", "_jasnosc"]
 GLOBAL_BLACKLIST = [
     "indicator", "light", "led", "display",   
-    "lock", "child", "physical control",     
-    "filter", "life", "used time",           
+    "lock", "child", "physical control",      
+    "filter", "life", "used time",            
     "alarm", "error", "fault", "problem",     
     "update", "install", "version",           
     "identify", "zidentyfikuj", "info",
     "iphone", "ipad", "phone", "mobile", 
     "router", "gateway", "brama"      
 ]
-
-BLOCKED_KEYWORDS = [
-    "App Version", "Audio Output", "BSSID", "SSID", "Connection Type", 
-    "Geocoded Location", "Last Update Trigger", "Location permission", 
-    "SIM 1", "SIM 2", "Storage", "Battery State", "Activity", "Focus",
-    "Distance Traveled", "Floors Ascended", "Steps", "Average Active Pace"
-]
-
+BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo.", "button.", "input_"]
+BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
 PRETTY_NAMES = {
     "temperature": "Temperatura", "humidity": "Wilgotność", "pressure": "Ciśnienie",
     "power": "Moc", "energy": "Energia", "voltage": "Napięcie", "current": "Natężenie",
     "battery": "Bateria", "signal_strength": "Sygnał", "pm25": "PM 2.5", "illuminance": "Jasność",
     "connectivity": "Połączenie"
 }
-BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo.", "button.", "input_"]
-BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
 
+# --- KOD JAVASCRIPT KARTY (TO PRZYWRÓCIŁEM!) ---
+CARD_JS = """
+const KNOWN_SENSOR_TYPES = [
+  { suffix: 'temperatura', icon: 'mdi:thermometer', unit: '°C' },
+  { suffix: 'wilgotnosc', icon: 'mdi:water-percent', unit: '%' },
+  { suffix: 'cisnienie', icon: 'mdi:gauge', unit: 'hPa' },
+  { suffix: 'moc', icon: 'mdi:lightning-bolt', unit: 'W' },
+  { suffix: 'napiecie', icon: 'mdi:sine-wave', unit: 'V' },
+  { suffix: 'natezenie', icon: 'mdi:current-ac', unit: 'A' },
+  { suffix: 'bateria', icon: 'mdi:battery', unit: '%' },
+  { suffix: 'pm25', icon: 'mdi:blur', unit: 'ug/m3' },
+  { suffix: 'pm25_density', icon: 'mdi:blur', unit: 'ug/m3' }
+];
 
+const SHARED_STYLES = `
+  .emp-card { 
+    background: var(--ha-card-background, white); 
+    border-radius: 12px; 
+    box-shadow: var(--ha-card-box-shadow, 0 2px 5px rgba(0,0,0,0.15)); 
+    padding: 16px; 
+    border: 1px solid var(--divider-color, #ddd);
+    transition: transform 0.1s;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .emp-card:hover { transform: scale(1.01); border-color: #bbb; }
+  
+  .header { display: flex; align-items: center; width: 100%; margin-bottom: 14px; }
+  
+  .icon-box { 
+    width: 48px; height: 48px; 
+    border-radius: 50%; 
+    display: flex; align-items: center; justify-content: center; 
+    margin-right: 16px; 
+    background: #eee; color: #444;
+    font-weight: bold;
+  }
+  
+  .is-working { background: #E8F5E9; color: #1B5E20; border: 2px solid #4CAF50; }
+  .is-idle { background: #FFFDE7; color: #E65100; border: 2px solid #FFC107; }
+  .is-absent { background: #FFEBEE; color: #B71C1C; border: 2px solid #EF5350; }
 
+  .info { flex: 1; }
+  .emp-name { font-weight: 800; font-size: 1.3rem; color: var(--primary-text-color); line-height: 1.2; }
+  .emp-status { font-size: 1rem; color: var(--secondary-text-color); font-weight: 600; margin-top: 2px; }
+  .emp-group { font-size: 0.75rem; color: var(--secondary-text-color); background: var(--secondary-background-color); padding: 2px 8px; border-radius: 4px; display: inline-block; margin-top: 4px; border: 1px solid var(--divider-color); }
 
+  .stats { text-align: right; min-width: 80px; }
+  .time-val { font-size: 1.6rem; font-weight: 900; color: var(--primary-text-color); }
+  .time-unit { font-size: 0.75rem; color: var(--secondary-text-color); font-weight: 700; text-transform: uppercase; }
+
+  .progress-container { width: 100%; height: 6px; background-color: #f0f0f0; border-radius: 3px; margin-bottom: 12px; overflow: hidden; }
+  .progress-bar { height: 100%; background-color: #4CAF50; border-radius: 3px; transition: width 0.5s ease-in-out; }
+  .progress-bar.over { background-color: #9C27B0; }
+
+  .sensors-row { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee); }
+  .sensor-chip { 
+    display: inline-flex; align-items: center; 
+    background: var(--secondary-background-color); 
+    padding: 6px 12px; border-radius: 20px; 
+    font-size: 0.9rem; font-weight: 600;
+    color: var(--primary-text-color); 
+    border: 1px solid var(--divider-color, #ddd);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  }
+  .sensor-chip ha-icon { --mdc-icon-size: 18px; margin-right: 6px; color: var(--secondary-text-color); }
+
+  .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 10px; scrollbar-width: none; }
+  .filter-btn {
+    border: none; background: var(--card-background-color); 
+    box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,0.1));
+    padding: 8px 16px; border-radius: 20px; font-weight: 600; color: var(--primary-text-color);
+    cursor: pointer; white-space: nowrap; transition: all 0.2s;
+    border: 1px solid var(--divider-color, transparent);
+  }
+  .filter-btn:hover { background: var(--secondary-background-color); }
+  .filter-btn.active { background: var(--primary-color); color: white; }
+`;
+
+function renderEmployeeHTML(hass, entityId) {
+  const statusEntity = hass.states[entityId];
+  if (!statusEntity) return '';
+
+  const fullName = statusEntity.attributes.friendly_name.replace(' - Status', '');
+  const groupName = statusEntity.attributes.group || 'Domyślna';
+  const baseId = entityId.replace('_status', '');
+  const state = statusEntity.state;
+
+  let statusClass = 'is-absent', iconName = 'mdi:account-off';
+  if (state === 'Pracuje') { statusClass = 'is-working'; iconName = 'mdi:laptop'; }
+  else if (state.includes('Idle') || state.includes('Obecny')) { statusClass = 'is-idle'; iconName = 'mdi:coffee'; }
+
+  const timeEntity = hass.states[`${baseId}_czas_pracy`];
+  const timeVal = timeEntity ? Math.round(parseFloat(timeEntity.state)) : 0;
+
+  const targetMinutes = 480;
+  let progressPct = (timeVal / targetMinutes) * 100;
+  let progressClass = "";
+  if (progressPct > 100) { progressPct = 100; progressClass = "over"; }
+
+  let sensorsHtml = '';
+  KNOWN_SENSOR_TYPES.forEach(type => {
+    const sId = `${baseId}_${type.suffix}`;
+    const sEnt = hass.states[sId];
+    if (sEnt && sEnt.state !== 'unavailable' && sEnt.state !== 'unknown') {
+      const unit = sEnt.attributes.unit_of_measurement || type.unit;
+      sensorsHtml += `
+        <div class="sensor-chip">
+          <ha-icon icon="${type.icon}"></ha-icon>
+          <span>${sEnt.state} ${unit}</span>
+        </div>`;
+    }
+  });
+
+  return `
+    <div class="emp-card" data-group="${groupName}">
+      <div class="header">
+        <div class="icon-box ${statusClass}"><ha-icon icon="${iconName}"></ha-icon></div>
+        <div class="info">
+          <div class="emp-name">${fullName}</div>
+          <div class="emp-status">${state}</div>
+          <div class="emp-group">${groupName}</div>
+        </div>
+        <div class="stats">
+          <div class="time-val">${timeVal}</div>
+          <div class="time-unit">MINUT</div>
+        </div>
+      </div>
+      <div class="progress-container" title="Cel: 8h"><div class="progress-bar ${progressClass}" style="width: ${progressPct}%"></div></div>
+      ${sensorsHtml ? `<div class="sensors-row">${sensorsHtml}</div>` : ''}
+    </div>
+  `;
+}
+
+class EmployeeDashboard extends HTMLElement {
+  setConfig(config) {
+    this.config = config;
+    this.title = config.title || "Zespół";
+    this.currentFilter = 'Wszyscy';
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+
+    if (!this.content) {
+      this.innerHTML = `
+        <style>
+          ${SHARED_STYLES}
+          .dashboard-container { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
+            gap: 16px; 
+          }
+          .dash-title { font-size: 1.4rem; font-weight: 800; margin-bottom: 15px; color: var(--primary-text-color); padding-left: 5px; }
+        </style>
+        <div class="dash-title">${this.title}</div>
+        <div id="filters" class="filter-bar"></div>
+        <div id="dashboard-content" class="dashboard-container">Ładowanie...</div>
+      `;
+      this.content = this.querySelector('#dashboard-content');
+      this.filtersContainer = this.querySelector('#filters');
+    }
+    this.render();
+  }
+
+  render() {
+    const hass = this._hass;
+    const employees = Object.keys(hass.states)
+      .filter(eid => eid.startsWith('sensor.') && eid.endsWith('_status'))
+      .sort();
+
+    if (employees.length === 0) {
+      this.content.innerHTML = "<div style='padding:20px;opacity:0.6'>Brak pracowników.</div>";
+      return;
+    }
+
+    const groups = new Set(['Wszyscy']);
+    employees.forEach(eid => {
+      const g = hass.states[eid].attributes.group;
+      if (g) groups.add(g);
+    });
+
+    this.filtersContainer.innerHTML = '';
+    groups.forEach(g => {
+      const btn = document.createElement('button');
+      btn.innerText = g;
+      btn.className = `filter-btn ${this.currentFilter === g ? 'active' : ''}`;
+      btn.onclick = () => {
+        this.currentFilter = g;
+        this.render();
+      };
+      this.filtersContainer.appendChild(btn);
+    });
+
+    const filtered = employees.filter(eid => {
+      if (this.currentFilter === 'Wszyscy') return true;
+      return hass.states[eid].attributes.group === this.currentFilter;
+    });
+
+    if (filtered.length === 0) {
+      this.content.innerHTML = `<div style='padding:20px;opacity:0.6'>Brak pracowników w grupie ${this.currentFilter}.</div>`;
+    } else {
+      this.content.innerHTML = filtered.map(eid => renderEmployeeHTML(hass, eid)).join('');
+    }
+  }
+  getCardSize() { return 3; }
+}
+
+class EmployeeCard extends HTMLElement {
+  setConfig(c) { if (!c.name) throw new Error('Podaj imię!'); this.config = c; }
+  set hass(hass) {
+    const id = this.config.name.toLowerCase().trim().replace(/ /g, "_");
+    const keys = Object.keys(hass.states);
+    const entityId = keys.find(k => k.includes(id) && k.endsWith('_status'));
+
+    if (!this.content) {
+      this.innerHTML = `<style>${SHARED_STYLES}</style><div id="card-content"></div>`;
+      this.content = this.querySelector('#card-content');
+    }
+    if (entityId) this.content.innerHTML = renderEmployeeHTML(hass, entityId);
+    else this.content.innerHTML = `Nie znaleziono pracownika: ${this.config.name}`;
+  }
+  getCardSize() { return 1; }
+  static getConfigElement() { return document.createElement("employee-card-editor"); }
+  static getStubConfig() { return { name: "Jan" }; }
+}
+
+class EmployeeCardEditor extends HTMLElement {
+  setConfig(c) { this._config = c; this.render(); }
+  render() {
+    if (!this.innerHTML) {
+      this.innerHTML = `<div class="card-config" style="padding:20px;"><label style="font-weight:bold">Imię Pracownika</label><input type="text" id="name-input" style="width:100%; padding:8px; margin-top:5px;"></div>`;
+      this.querySelector('#name-input').addEventListener('input', (e) => this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: { ...this._config, name: e.target.value } }, bubbles: true, composed: true })));
+    }
+    this.querySelector('#name-input').value = this._config.name || '';
+  }
+}
+
+customElements.define('employee-card-editor', EmployeeCardEditor);
+customElements.define('employee-card', EmployeeCard);
+customElements.define('employee-dashboard', EmployeeDashboard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({ type: "employee-card", name: "Pracownik (Pojedynczy)", description: "Jeden kafelek" });
+window.customCards.push({ type: "employee-dashboard", name: "Panel Zespołu (AUTO)", preview: true, description: "Automatycznie wyświetla wszystkich pracowników" });
+"""
 
 # --- FUNKCJE POMOCNICZE ---
 def load_json(file_path):
@@ -112,22 +347,16 @@ def get_clean_sensors():
                 device_class = attrs.get("device_class")
                 
                 if not (eid.startswith(("sensor.", "binary_sensor.", "switch.", "light."))): continue
+                if attrs.get("managed_by") == "employee_manager": continue
+                if eid.endswith("_status") or eid.endswith("_czas_pracy"): continue
 
-                if attrs.get("managed_by") == "employee_manager":
-                    continue
-
-                if eid.endswith("_status") or eid.endswith("_czas_pracy"):
-                    continue
-
-                if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST):
-                    continue
-
+                # Filtry
+                if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST): continue
                 if any(eid.startswith(p) for p in BLOCKED_PREFIXES): continue
                 if device_class in BLOCKED_DEVICE_CLASSES: continue
                 if " - " in friendly_name and "status" in friendly_name: continue 
 
                 unit = attrs.get("unit_of_measurement", "")
-                
                 orig_friendly_name = attrs.get("friendly_name", eid)
                 main_label = orig_friendly_name
                 
@@ -145,7 +374,6 @@ def get_clean_sensors():
                     "state": entity.get("state", "-"), 
                     "device_class": device_class
                 })
-            
             sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
     except Exception as e:
         print(f"Błąd API: {e}", flush=True)
@@ -177,7 +405,7 @@ def register_lovelace_resource():
         else: return False, f"Błąd API: {post_resp.text}"
     except Exception as e: return False, str(e)
 
-# --- INTERFEJS HTML ---
+# --- INTERFEJS HTML (POPRAWIONY JS: addEventListener) ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -321,10 +549,7 @@ HTML_PAGE = """
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // DANE Z FLASKA
     const ALL_SENSORS = {{ all_sensors | tojson }};
-    
-    // ELEMENTY DOM
     const chkContainer = document.getElementById('sensorList');
     const countBadge = document.getElementById('count-badge');
     const installModal = new bootstrap.Modal(document.getElementById('installModal'));
@@ -333,7 +558,6 @@ HTML_PAGE = """
     let allEmployeesData = [];
     let currentGroups = [];
 
-    // --- FUNKCJE POMOCNICZE ---
     function updateCount() { 
         if(!chkContainer) return;
         const count = chkContainer.querySelectorAll('input:checked').length;
@@ -369,7 +593,6 @@ HTML_PAGE = """
         btn.innerHTML = originalText;
     }
 
-    // --- RENDEROWANIE LISTY SENSORÓW ---
     function renderSensorList(filterText = "") {
         if(!chkContainer) return;
         chkContainer.innerHTML = "";
@@ -413,10 +636,8 @@ HTML_PAGE = """
         });
     }
 
-    // Listener do wyszukiwarki (z zabezpieczeniem ?)
     document.getElementById('sensorSearch')?.addEventListener('input', (e) => renderSensorList(e.target.value));
 
-    // --- GRUPY ---
     async function loadGroups() {
         const res = await fetch('api/groups');
         currentGroups = await res.json();
@@ -445,7 +666,6 @@ HTML_PAGE = """
         filters.innerHTML = html;
     }
     
-    // Obsługa formularza grup
     const groupForm = document.getElementById('groupForm');
     if(groupForm) {
         groupForm.onsubmit = async (e) => {
@@ -460,7 +680,6 @@ HTML_PAGE = """
         if(confirm("Usunąć grupę?")) { await fetch('api/groups/'+n, {method:'DELETE'}); loadGroups(); loadConfig(); refreshMonitorData(); }
     };
 
-    // --- MONITOR ---
     function filterMonitor(group) {
         currentFilter = group;
         renderFilterBar();
@@ -497,9 +716,7 @@ HTML_PAGE = """
     }
 
     async function refreshMonitorData() {
-        // Odświeżaj tylko jeśli zakładka Monitor jest aktywna
         if (!document.getElementById('tab-monitor')?.classList.contains('active')) return;
-        
         const res = await fetch('api/monitor');
         allEmployeesData = await res.json();
         renderGrid();
@@ -541,21 +758,17 @@ HTML_PAGE = """
 
     window.del = async (i) => { if(confirm("Usunąć?")) { await fetch('api/employees/'+i, { method: 'DELETE' }); loadConfig(); refreshMonitorData(); } }
 
-    // --- HISTORIA ---
     async function loadHistory() {
         const container = document.getElementById('history-container');
         if(!container) return;
-        
         container.innerHTML = '<div class="p-4 text-center">Pobieranie danych...</div>';
         try {
             const res = await fetch('api/history');
             const data = await res.json();
-            
             if(!data || data.length === 0) {
                 container.innerHTML = '<div class="p-4 text-center text-muted">Brak raportów w bazie.</div>';
                 return;
             }
-
             let html = '';
             data.forEach(report => {
                 html += `
@@ -587,10 +800,8 @@ HTML_PAGE = """
         }
     }
 
-    // Listener do Historii (z zabezpieczeniem ?)
     document.getElementById('tab-history')?.addEventListener('shown.bs.tab', loadHistory);
 
-    // --- INICJALIZACJA ---
     renderSensorList(); 
     loadGroups(); 
     loadConfig(); 
@@ -602,10 +813,14 @@ HTML_PAGE = """
 """
 
 # --- ENDPOINTY FLASK ---
-
 @app.route('/')
 def index():
     return render_template_string(HTML_PAGE, all_sensors=get_clean_sensors())
+
+# TO JEST TO, CZEGO BRAKOWAŁO: Serwowanie pliku JS karty
+@app.route('/local/employee-card.js')
+def serve_card():
+    return Response(CARD_JS, mimetype='application/javascript')
 
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
@@ -647,15 +862,12 @@ def api_del(i):
     if 0 <= i < len(emps):
         to_delete = emps[i]
         safe_name = to_delete['name'].lower().replace(" ", "_")
-        
         delete_ha_state(f"sensor.{safe_name}_status")
         delete_ha_state(f"sensor.{safe_name}_czas_pracy")
         for suffix in SUFFIXES_TO_CLEAN:
             delete_ha_state(f"sensor.{safe_name}{suffix}")
-            
         del emps[i]
         save_json(DATA_FILE, emps)
-        
     return jsonify({"status":"ok"})
 
 @app.route('/api/monitor', methods=['GET'])
@@ -684,28 +896,9 @@ def api_monitor():
         res.append({"name": emp['name'], "group": emp.get('group', 'Domyślna'), "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
 
-@app.route('/download_report')
-def download_report():
-    """Generuje raport CSV z bazy danych SQLite"""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("SELECT work_date, employee_name, minutes_worked FROM work_history ORDER BY work_date DESC")
-        rows = c.fetchall()
-        conn.close()
-
-        si = io.StringIO()
-        cw = csv.writer(si, delimiter=';')
-        cw.writerow(["Data", "Pracownik", "Minuty", "Godziny (ok.)"])
-        
-        for row in rows:
-            # row[0]=Date, row[1]=Name, row[2]=Minutes
-            hours = round(row[2] / 60, 2)
-            cw.writerow([row[0], row[1], row[2], str(hours).replace('.', ',')])
-            
-        return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": "attachment; filename=Raport_Historii.csv"})
-    except Exception as e:
-        return f"Błąd generowania raportu: {e}", 500
+@app.route('/api/history', methods=['GET'])
+def api_history():
+    return jsonify(load_json(HISTORY_FILE))
 
 @app.route('/api/install_card', methods=['POST'])
 def api_install_card():
@@ -714,7 +907,3 @@ def api_install_card():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
-@app.route('/api/history', methods=['GET'])
-def api_history():
-    return jsonify(load_json(HISTORY_FILE))
