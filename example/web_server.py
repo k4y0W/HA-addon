@@ -16,7 +16,7 @@ DB_FILE = "/data/employee_history.db"
 HISTORY_FILE = "/data/history.json"
 
 # Ścieżki do instalacji karty
-SOURCE_JS_FILE = "/app/employee-card.js"
+SOURCE_JS_FILE = "/employee-card.js"
 HA_WWW_DIR = "/config/www"
 DEST_JS_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
 CARD_URL_RESOURCE = "/local/employee-card.js"
