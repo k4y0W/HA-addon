@@ -15,10 +15,15 @@ GROUPS_FILE = "/data/groups.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
 HISTORY_FILE = "/data/history.json"
-SOURCE_JS_FILE = "/employee-card.js"
+SOURCE_JS_FILE = "/app/employee-card.js"
 HA_WWW_PATH="/config/www/employee-card.js"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
+HA_WWW_DIR = "/config/www"
+DEST_JS_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
+CARD_URL_RESOURCE = "/local/employee-card.js"
+
+
 
 try:
     with open(OPTIONS_FILE, 'r') as f:
@@ -78,7 +83,49 @@ BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
 
 
 
+def register_lovelace_resource():
+    """
+    1. Kopiuje plik do /config/www/
+    2. Rejestruje zasób w Lovelace API
+    """
+    # KROK 1: Kopiowanie pliku
+    try:
+        if not os.path.exists(HA_WWW_DIR):
+            os.makedirs(HA_WWW_DIR)
+            print(f"Utworzono katalog {HA_WWW_DIR}", flush=True)
+        
+        # Kopiujemy plik
+        shutil.copy(SOURCE_JS_FILE, DEST_JS_FILE)
+        print(f"Skopiowano plik z {SOURCE_JS_FILE} do {DEST_JS_FILE}", flush=True)
+    except Exception as e:
+        return False, f"Błąd kopiowania pliku: {str(e)}"
 
+    # KROK 2: Rejestracja w API
+    install_headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+    
+    try:
+        # Sprawdź czy zasób już istnieje
+        url = f"{API_URL}/lovelace/resources"
+        get_resp = requests.get(url, headers=install_headers)
+        
+        if get_resp.status_code == 200:
+            resources = get_resp.json()
+            for res in resources:
+                if res['url'] == CARD_URL_RESOURCE:
+                    # Jeśli istnieje, ale chcemy zaktualizować (opcjonalnie można zrobić PUT)
+                    return True, "Karta została zaktualizowana (plik podmieniony)!"
+        
+        # Jeśli nie istnieje, tworzymy nowy
+        payload = {"url": CARD_URL_RESOURCE, "type": "module"}
+        post_resp = requests.post(url, headers=install_headers, json=payload)
+        
+        if post_resp.status_code in [200, 201]: 
+            return True, "Pomyślnie dodano kartę do zasobów!"
+        else: 
+            return False, f"Błąd API ({post_resp.status_code}): {post_resp.text}"
+            
+    except Exception as e: 
+        return False, f"Wyjątek API: {str(e)}"
 
 # --- FUNKCJE POMOCNICZE ---
 def load_json(file_path):
