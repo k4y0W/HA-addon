@@ -4,6 +4,7 @@ import requests
 import json
 import sys
 import sqlite3
+import shutil
 from datetime import datetime
 
 # --- KONFIGURACJA PLIKÓW ---
@@ -12,6 +13,12 @@ STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
 HISTORY_FILE = "/data/history.json"
+
+# Konfiguracja instalacji karty
+SOURCE_JS_FILE = "/app/employee-card.js"
+HA_WWW_DIR = "/config/www"
+DEST_JS_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
+CARD_URL_RESOURCE = "/local/employee-card.js"
 
 # --- KONFIGURACJA API I TOKENA ---
 TOKEN = ""
@@ -56,15 +63,12 @@ MANAGED_SUFFIXES = ["_status", "_czas_pracy"]
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-# --- FUNKCJA, KTÓREJ BRAKOWAŁO ---
 def wait_for_api():
     """Wstrzymuje start do momentu nawiązania połączenia z HA"""
     log(f"Sprawdzanie połączenia z API: {API_URL} ...")
     while True:
         try:
             r = requests.get(f"{API_URL}/", headers=HEADERS, timeout=5)
-            # Akceptujemy 401/405 bo to znaczy że serwer żyje, tylko może token jest zły
-            # Ale chcemy ruszyć dalej, żeby spróbować pisać.
             if r.status_code in [200, 201, 401, 404, 405]:
                 if r.status_code == 401:
                     log("!!! OSTRZEŻENIE: API zwróciło 401 (Unauthorized). Sprawdź czy token jest poprawny!")
@@ -75,6 +79,46 @@ def wait_for_api():
         
         log("Oczekiwanie na Home Assistant... (Ponowna próba za 10s)")
         time.sleep(10)
+
+def auto_install_card():
+    """Automatycznie instaluje lub aktualizuje kartę w HA"""
+    log(">>> [AUTO-INSTALL] Rozpoczynam automatyczną instalację karty...")
+    
+    # 1. Kopiowanie pliku
+    try:
+        if not os.path.exists(HA_WWW_DIR):
+            os.makedirs(HA_WWW_DIR)
+        shutil.copy(SOURCE_JS_FILE, DEST_JS_FILE)
+        log(f"   [OK] Plik skopiowany do {DEST_JS_FILE}")
+    except Exception as e:
+        log(f"   [BŁĄD] Nie udało się skopiować pliku: {e}")
+        return
+
+    # 2. Rejestracja w Zasobach HA
+    try:
+        url = f"{API_URL}/lovelace/resources"
+        # Sprawdzenie czy już jest
+        get_resp = requests.get(url, headers=HEADERS)
+        
+        if get_resp.status_code == 200:
+            resources = get_resp.json()
+            for res in resources:
+                if res['url'] == CARD_URL_RESOURCE:
+                    log("   [INFO] Karta jest już zarejestrowana w zasobach.")
+                    return # Jest ok, nie trzeba nic robić
+
+        # Jeśli nie ma, to dodajemy
+        payload = {"url": CARD_URL_RESOURCE, "type": "module"}
+        post_resp = requests.post(url, headers=HEADERS, json=payload)
+        
+        if post_resp.status_code in [200, 201]: 
+            log("   [SUKCES] Karta została dodana do zasobów Lovelace!")
+        else: 
+            log(f"   [BŁĄD API] Kod: {post_resp.status_code}, Treść: {post_resp.text}")
+            
+    except Exception as e: 
+        log(f"   [BŁĄD KRYTYCZNY] Podczas rejestracji karty: {e}")
+
 
 def init_db():
     try:
@@ -147,7 +191,6 @@ def set_state(entity_id, state, friendly, icon, group, unit=None):
         log(f"Wyjątek przy ustawianiu {entity_id}: {e}")
 
 def save_report_to_db(work_counters):
-    # Prosta wersja zapisu historii do pliku JSON (dla frontendu)
     try:
         history = []
         if os.path.exists(HISTORY_FILE):
@@ -176,6 +219,11 @@ def save_report_to_db(work_counters):
 
 def main():
     wait_for_api()
+    
+    # === TUTAJ JEST ZMIANA - AUTOMATYCZNA INSTALACJA ===
+    auto_install_card()
+    # ===================================================
+
     log(f"=== START SYSTEMU LOGIKI ===")
     init_db()
     
@@ -228,7 +276,6 @@ def main():
                     attrs = data.get('attributes', {})
                     unit = attrs.get('unit_of_measurement')
                     
-                    # Logika wykrywania pracy
                     if unit == 'W' or unit == 'kW':
                         try:
                             val = float(state_val)
@@ -238,7 +285,6 @@ def main():
                     elif eid.startswith("binary_sensor.") and state_val == 'on':
                         is_working = True
                     
-                    # Kopiowanie wartości do wirtualnych sensorów
                     suffix_info = None
                     if unit in UNIT_MAP: suffix_info = UNIT_MAP[unit]
                     
