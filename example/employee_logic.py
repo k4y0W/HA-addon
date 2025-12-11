@@ -6,15 +6,75 @@ import sys
 import sqlite3
 from datetime import datetime
 
-HARDCODED_TOKEN = ""
+# --- KONFIGURACJA PLIKÓW ---
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
 HISTORY_FILE = "/data/history.json"
 
+# --- KONFIGURACJA API I TOKENA ---
+TOKEN = ""
+API_URL = ""
+
+# 1. Próba pobrania tokena z pliku opcji
+try:
+    if os.path.exists(OPTIONS_FILE):
+        with open(OPTIONS_FILE, 'r') as f:
+            opts = json.load(f)
+            TOKEN = opts.get("ha_token", "").strip()
+except:
+    pass
+
+# 2. Wybór trybu działania
+if len(TOKEN) > 50:
+    API_URL = "http://172.30.32.1:8123/api"
+    print(f">>> [LOGIC] TRYB RĘCZNY: Używam tokena użytkownika. Adres: {API_URL}", flush=True)
+else:
+    TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
+    API_URL = "http://supervisor/core/api"
+    print(">>> [LOGIC] TRYB SUPERVISOR: Używam tokena systemowego.", flush=True)
+
+HEADERS = {
+    "Authorization": f"Bearer {TOKEN}",
+    "Content-Type": "application/json",
+}
+
+UNIT_MAP = {
+    "W": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
+    "kW": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
+    "V": {"suffix": "napiecie", "icon": "mdi:sine-wave"},
+    "A": {"suffix": "natezenie", "icon": "mdi:current-ac"},
+    "°C": {"suffix": "temperatura", "icon": "mdi:thermometer"},
+    "%": {"suffix": "wilgotnosc", "icon": "mdi:water-percent"},
+    "hPa": {"suffix": "cisnienie", "icon": "mdi:gauge"},
+    "ug/m³": {"suffix": "pm25", "icon": "mdi:blur"},
+}
+
+MANAGED_SUFFIXES = ["_status", "_czas_pracy"]
+
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+# --- FUNKCJA, KTÓREJ BRAKOWAŁO ---
+def wait_for_api():
+    """Wstrzymuje start do momentu nawiązania połączenia z HA"""
+    log(f"Sprawdzanie połączenia z API: {API_URL} ...")
+    while True:
+        try:
+            r = requests.get(f"{API_URL}/", headers=HEADERS, timeout=5)
+            # Akceptujemy 401/405 bo to znaczy że serwer żyje, tylko może token jest zły
+            # Ale chcemy ruszyć dalej, żeby spróbować pisać.
+            if r.status_code in [200, 201, 401, 404, 405]:
+                if r.status_code == 401:
+                    log("!!! OSTRZEŻENIE: API zwróciło 401 (Unauthorized). Sprawdź czy token jest poprawny!")
+                log(">>> POŁĄCZENIE NAWIĄZANE! Startuję logikę sensorów. <<<")
+                return
+        except Exception:
+            pass
+        
+        log("Oczekiwanie na Home Assistant... (Ponowna próba za 10s)")
+        time.sleep(10)
 
 def init_db():
     try:
@@ -25,7 +85,6 @@ def init_db():
                      UNIQUE(work_date, employee_name))''')
         conn.commit()
         conn.close()
-        log(f"Baza danych zainicjowana: {DB_FILE}")
     except Exception as e:
         log(f"Błąd inicjalizacji bazy: {e}")
 
@@ -44,58 +103,6 @@ def log_minute_to_db(employee_name):
         conn.close()
     except Exception as e:
         log(f"Błąd zapisu do bazy dla {employee_name}: {e}")
-
-import os
-import time
-import requests
-import json
-import sys
-import sqlite3
-from datetime import datetime
-
-# --- KONFIGURACJA PLIKÓW ---
-DATA_FILE = "/data/employees.json"
-STATUS_FILE = "/data/status.json"
-OPTIONS_FILE = "/data/options.json"
-DB_FILE = "/data/employee_history.db"
-HISTORY_FILE = "/data/history.json"
-
-# --- KONFIGURACJA API (NAPRAWIONA DLA ADD-ONÓW) ---
-SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
-
-if SUPERVISOR_TOKEN:
-    print(">>> [LOGIC] UŻYWAM TOKENA SUPERVISORA (Tryb Wewnętrzny) <<<", flush=True)
-    TOKEN = SUPERVISOR_TOKEN
-    API_URL = "http://supervisor/core/api"  # Kluczowa zmiana: adres wewnętrzny
-else:
-    print(">>> [LOGIC] BRAK SUPERVISORA - SZUKAM W PLIKU <<<", flush=True)
-    try:
-        if os.path.exists(OPTIONS_FILE):
-            with open(OPTIONS_FILE, 'r') as f:
-                opts = json.load(f)
-                TOKEN = opts.get("ha_token", "")
-        else:
-            TOKEN = ""
-    except:
-        TOKEN = ""
-    
-    # Fallback tylko dla testów poza HA
-    API_URL = "http://homeassistant:8123/api"
-
-UNIT_MAP = {
-    "W": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
-    "kW": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
-    "V": {"suffix": "napiecie", "icon": "mdi:sine-wave"},
-    "A": {"suffix": "natezenie", "icon": "mdi:current-ac"},
-    "°C": {"suffix": "temperatura", "icon": "mdi:thermometer"},
-    "%": {"suffix": "wilgotnosc", "icon": "mdi:water-percent"},
-    "hPa": {"suffix": "cisnienie", "icon": "mdi:gauge"},
-    "ug/m³": {"suffix": "pm25", "icon": "mdi:blur"},
-}
-
-MANAGED_SUFFIXES = [
-    "_status", "_czas_pracy","Iphone"
-]
 
 def get_data():
     if not os.path.exists(DATA_FILE): return []
@@ -133,73 +140,43 @@ def set_state(entity_id, state, friendly, icon, group, unit=None):
     }
     if unit: attrs["unit_of_measurement"] = unit
     try:
-        requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json={"state": str(state), "attributes": attrs})
+        r = requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json={"state": str(state), "attributes": attrs})
+        if r.status_code not in [200, 201]:
+            log(f"Błąd (kod {r.status_code}) przy ustawianiu {entity_id}")
     except Exception as e:
-        log(f"Błąd ustawiania {entity_id}: {e}")
-
-def delete_entity_force(entity_id):
-    try:
-        log(f"-> PRÓBA USUNIĘCIA: {entity_id}")
-        r = requests.delete(f"{API_URL}/states/{entity_id}", headers=HEADERS)
-        if r.status_code in [200, 201, 204]:
-            log(f"   SUKCES! Usunięto {entity_id}")
-        else:
-            log(f"   BŁĄD API! Kod: {r.status_code}, Treść: {r.text}")
-    except Exception as e:
-        log(f"   WYJĄTEK: {e}")
+        log(f"Wyjątek przy ustawianiu {entity_id}: {e}")
 
 def save_report_to_db(work_counters):
-    log(">>> GENEROWANIE RAPORTU DO BAZY... <<<")
+    # Prosta wersja zapisu historii do pliku JSON (dla frontendu)
     try:
         history = []
         if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r') as f:
-                history = json.load(f)
+            with open(HISTORY_FILE, 'r') as f: history = json.load(f)
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         snapshot = []
-        
         emps = get_data() 
         for emp in emps:
             name = emp['name']
             safe_name = name.lower().replace(" ", "_")
-            
             status = "Nieznany"
-            status_data = get_state_full(f"sensor.{safe_name}_status")
-            if status_data: status = status_data['state']
+            sdata = get_state_full(f"sensor.{safe_name}_status")
+            if sdata: status = sdata['state']
             
             work_time = 0.0
             if name in work_counters: work_time = round(work_counters[name], 1)
             
-            snapshot.append({
-                "name": name,
-                "group": emp.get('group', 'Domyślna'),
-                "status": status,
-                "work_time": work_time
-            })
+            snapshot.append({"name": name, "group": emp.get('group', 'Domyślna'), "status": status, "work_time": work_time})
 
-        new_entry = {
-            "id": int(time.time()), 
-            "date": timestamp,
-            "entries": snapshot
-        }
-
-        history.insert(0, new_entry)
-        
+        history.insert(0, {"id": int(time.time()), "date": timestamp, "entries": snapshot})
         if len(history) > 1000: history = history[:1000]
 
-        with open(HISTORY_FILE, 'w') as f:
-            json.dump(history, f, indent=4)
-            
-        log(">>> RAPORT ZAPISANY <<<")
-
-    except Exception as e:
-        log(f"Błąd zapisu raportu: {e}")
-
+        with open(HISTORY_FILE, 'w') as f: json.dump(history, f, indent=4)
+    except: pass
 
 def main():
     wait_for_api()
-    log(f"=== START SYSTEMU (API: {API_URL}) ===")
+    log(f"=== START SYSTEMU LOGIKI ===")
     init_db()
     
     memory = load_status()
@@ -218,62 +195,13 @@ def main():
             if current_time - last_report_time >= 60:
                 save_report_to_db(work_counters)
                 last_report_time = current_time
+            
             emps = get_data()
-            allowed_ids = set()
-
             loop_counter += 1
             should_save_db = False
-            
             if loop_counter >= 6:
                 should_save_db = True
                 loop_counter = 0
-
-            for emp in emps:
-                name = emp['name'].strip()
-                safe = name.lower().replace(" ", "_")
-                group = emp.get('group', 'Domyślna')
-
-                allowed_ids.add(f"sensor.{safe}_status")
-                allowed_ids.add(f"sensor.{safe}_czas_pracy")
-
-                for eid in emp.get('sensors', []):
-                    data = get_state_full(eid)
-                    if not data: continue
-                    attrs = data.get('attributes', {})
-                    unit = attrs.get('unit_of_measurement')
-                    dev_class = attrs.get('device_class')
-
-                    suffix_info = None
-                    if unit in UNIT_MAP:
-                        suffix_info = UNIT_MAP[unit]
-                        if unit == '%' and dev_class == 'battery':
-                            suffix_info = {"suffix": "bateria", "icon": "mdi:battery"}
-                    elif dev_class == 'battery':
-                        suffix_info = {"suffix": "bateria", "icon": "mdi:battery"}
-                    
-                    if suffix_info:
-                        allowed_ids.add(f"sensor.{safe}_{suffix_info['suffix']}")
-
-            try:
-                r = requests.get(f"{API_URL}/states", headers=HEADERS)
-                if r.status_code == 200:
-                    all_states = r.json()
-                    for entity in all_states:
-                        eid = entity['entity_id']
-                        if not eid.startswith("sensor."): continue
-
-                        is_managed = False
-                        for suffix in MANAGED_SUFFIXES:
-                            if eid.endswith(suffix):
-                                is_managed = True
-                                break
-                        
-                        if is_managed:
-                            if eid not in allowed_ids:
-                                delete_entity_force(eid)
-                                
-            except Exception as e:
-                log(f"Błąd skanowania: {e}")
 
             current_date_str = datetime.now().strftime("%Y-%m-%d")
             if current_date_str != memory["date"]:
@@ -290,47 +218,37 @@ def main():
                 if name not in work_counters: work_counters[name] = 0.0
                 is_working = False
                 
+                # Skanowanie czujników
                 for eid in emp.get('sensors', []):
                     data = get_state_full(eid)
                     if not data: continue
                     state_val = data['state']
                     if state_val in ['unavailable', 'unknown', 'None']: continue
+                    
                     attrs = data.get('attributes', {})
                     unit = attrs.get('unit_of_measurement')
-                    dev_class = attrs.get('device_class')
-
+                    
+                    # Logika wykrywania pracy
                     if unit == 'W' or unit == 'kW':
                         try:
                             val = float(state_val)
                             if unit == 'kW': val *= 1000
                             if val > 20.0: is_working = True
                         except: pass
+                    elif eid.startswith("binary_sensor.") and state_val == 'on':
+                        is_working = True
                     
+                    # Kopiowanie wartości do wirtualnych sensorów
                     suffix_info = None
-                    if unit in UNIT_MAP:
-                        suffix_info = UNIT_MAP[unit]
-                        if unit == '%' and dev_class == 'battery':
-                            suffix_info = {"suffix": "bateria", "icon": "mdi:battery"}
-                    elif dev_class == 'battery':
-                        suffix_info = {"suffix": "bateria", "icon": "mdi:battery"}
-
+                    if unit in UNIT_MAP: suffix_info = UNIT_MAP[unit]
+                    
                     if suffix_info:
                         v_id = f"sensor.{safe}_{suffix_info['suffix']}"
                         set_state(v_id, state_val, f"{name} {suffix_info['suffix']}", suffix_info['icon'], group, unit)
 
-                if not is_working:
-                    for eid in emp.get('sensors', []):
-                        if eid.startswith("binary_sensor."):
-                            data = get_state_full(eid)
-                            if data and data['state'] == 'on':
-                                is_working = True
-                
                 status = "Pracuje" if is_working else "Nieobecny"
-                if is_working: 
-                    work_counters[name] += (10/60)
-                    
-                if is_working and should_save_db:
-                    log_minute_to_db(name)
+                if is_working: work_counters[name] += (10/60)
+                if is_working and should_save_db: log_minute_to_db(name)
                 
                 set_state(f"sensor.{safe}_status", status, f"{name} - Status", "mdi:laptop" if is_working else "mdi:account-off", group)
                 set_state(f"sensor.{safe}_czas_pracy", round(work_counters[name], 1), f"{name} - Czas", "mdi:clock", group, "min")
@@ -339,7 +257,7 @@ def main():
             save_status(memory)
             
         except Exception as e:
-            log(f"Krytyczny błąd: {e}")
+            log(f"Krytyczny błąd w pętli: {e}")
 
         time.sleep(10)
 
