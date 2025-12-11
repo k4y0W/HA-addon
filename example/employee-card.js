@@ -134,54 +134,7 @@ function renderEmployeeHTML(hass, entityId) {
   `;
 }
 
-async function loadHistory() {
-  const container = document.getElementById('history-container');
-  container.innerHTML = '<div class="p-4 text-center">Pobieranie danych...</div>';
-
-  try {
-    const res = await fetch('api/history');
-    const data = await res.json();
-
-    if (!data || data.length === 0) {
-      container.innerHTML = '<div class="p-4 text-center text-muted">Brak raportów w bazie.</div>';
-      return;
-    }
-
-    let html = '';
-    // Iterujemy po każdym raporcie (zrzucie)
-    data.forEach(report => {
-      html += `
-            <div class="border-bottom p-3">
-                <div class="d-flex justify-content-between mb-2">
-                    <strong class="text-primary fs-5">${report.date}</strong>
-                    <span class="badge bg-secondary">ID: ${report.id}</span>
-                </div>
-                <table class="table table-sm table-bordered mb-0">
-                    <thead class="table-light">
-                        <tr><th>Pracownik</th><th>Grupa</th><th>Status</th><th>Czas pracy</th></tr>
-                    </thead>
-                    <tbody>
-                        ${report.entries.map(e => `
-                            <tr>
-                                <td>${e.name}</td>
-                                <td><small>${e.group}</small></td>
-                                <td class="${e.status === 'Pracuje' ? 'text-success fw-bold' : ''}">${e.status}</td>
-                                <td>${e.work_time} min</td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>`;
-    });
-
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = '<div class="p-4 text-danger">Błąd ładowania historii.</div>';
-  }
-}
-
-document.getElementById('tab-history').addEventListener('shown.bs.tab', loadHistory);
-
+//TUTUTUTTUTUUTUTTU
 class EmployeeDashboard extends HTMLElement {
   setConfig(config) {
     this.config = config;
