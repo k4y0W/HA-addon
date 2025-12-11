@@ -12,11 +12,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 RUN pip install flask gunicorn requests
 
+RUN mkdir -p /app
+
 COPY run.sh /
 COPY employee_logic.py /
 COPY web_server.py /
 COPY employee_map.py /
-COPY employee-card.js /
+COPY employee-card.js /app/
 COPY templates/ /templates/
 
 RUN chmod a+x /run.sh
