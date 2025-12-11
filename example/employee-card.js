@@ -128,18 +128,95 @@ function renderEmployeeHTML(hass, entityId) {
         </div>
       </div>
       <div class="progress-container" title="Cel: 8h"><div class="progress-bar ${progressClass}" style="width: ${progressPct}%"></div></div>
-      
       ${sensorsHtml ? `<div class="sensors-row">${sensorsHtml}</div>` : ''}
     </div>
   `;
 }
 
-//TUTUTUTTUTUUTUTTU
+// --- NOWA FUNKCJA HISTORII DO PANELU WEB ---
+// Wywoływana z poziomu index.html (jeśli korzystasz) lub Dashboardu
+async function loadHistoryWEB() {
+  const container = document.getElementById('history-container');
+  if(!container) return;
+  container.innerHTML = '<div class="p-4 text-center">Pobieranie danych...</div>';
+
+  try {
+    const res = await fetch('api/history');
+    const data = await res.json();
+    if (!data || data.length === 0) {
+      container.innerHTML = '<div class="p-4 text-center text-muted">Brak raportów w bazie.</div>';
+      return;
+    }
+
+    let html = '';
+    data.forEach(report => {
+      // Sekcja Analizy Grup
+      let groupAnalysisHtml = '';
+      if(report.group_summary && report.group_summary.length > 0) {
+          groupAnalysisHtml = `
+          <div class="mb-3 p-2 bg-light rounded border">
+              <h6 class="fw-bold text-dark">📊 Analiza Pomieszczeń</h6>
+              <table class="table table-sm table-striped mb-0" style="font-size:0.9rem">
+                  <thead><tr><th>Grupa / Pokój</th><th>Łącznie Godzin</th><th>Średnia / Os.</th></tr></thead>
+                  <tbody>
+                      ${report.group_summary.map(g => `
+                          <tr>
+                              <td><strong>${g.group}</strong></td>
+                              <td>${g.total_hours} h</td>
+                              <td>${g.avg_per_person} min</td>
+                          </tr>
+                      `).join('')}
+                  </tbody>
+              </table>
+          </div>`;
+      }
+
+      html += `
+            <div class="border-bottom p-3">
+                <div class="d-flex justify-content-between mb-2">
+                    <strong class="text-primary fs-5">${report.date}</strong>
+                    <span class="badge bg-secondary">ID: ${report.id}</span>
+                </div>
+                ${groupAnalysisHtml}
+                <table class="table table-sm table-bordered mb-0">
+                    <thead class="table-light">
+                        <tr><th>Grupa</th><th>Pracownik</th><th>Czas pracy</th></tr>
+                    </thead>
+                    <tbody>
+                        ${report.entries.map(e => `
+                            <tr>
+                                <td class="fw-bold text-secondary">${e.group}</td>
+                                <td>${e.name}</td>
+                                <td>${e.work_time} min</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+    });
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="p-4 text-danger">Błąd ładowania historii.</div>';
+  }
+}
+// Ten event listener zadziała w kontekście Add-onu
+if(document.getElementById('tab-history')) {
+    document.getElementById('tab-history').addEventListener('shown.bs.tab', loadHistoryWEB);
+}
+// -------------------------------------------
+
 class EmployeeDashboard extends HTMLElement {
   setConfig(config) {
     this.config = config;
     this.title = config.title || "Zespół";
-    this.currentFilter = 'Wszyscy';
+    // Jeśli w konfiguracji podano grupę, ustawiamy ją na sztywno
+    if (config.group) {
+        this.currentFilter = config.group;
+        this.fixedGroup = true;
+    } else {
+        this.currentFilter = 'Wszyscy';
+        this.fixedGroup = false;
+    }
   }
 
   set hass(hass) {
@@ -178,25 +255,27 @@ class EmployeeDashboard extends HTMLElement {
       return;
     }
 
-    const groups = new Set(['Wszyscy']);
-    employees.forEach(eid => {
-      const g = hass.states[eid].attributes.group;
-      if (g) groups.add(g);
-    });
+    // --- LOGIKA FILTRÓW ---
+    // Jeśli mamy sztywną grupę (fixedGroup), NIE rysujemy przycisków filtrów
+    if (!this.fixedGroup) {
+        const groups = new Set(['Wszyscy']);
+        employees.forEach(eid => {
+          const g = hass.states[eid].attributes.group;
+          if (g) groups.add(g);
+        });
 
-    this.filtersContainer.innerHTML = '';
-    groups.forEach(g => {
-      const btn = document.createElement('button');
-      btn.innerText = g;
-      btn.className = `filter-btn ${this.currentFilter === g ? 'active' : ''}`;
-
-      btn.onclick = () => {
-        this.currentFilter = g;
-        this.render();
-      };
-
-      this.filtersContainer.appendChild(btn);
-    });
+        this.filtersContainer.innerHTML = '';
+        groups.forEach(g => {
+          const btn = document.createElement('button');
+          btn.innerText = g;
+          btn.className = `filter-btn ${this.currentFilter === g ? 'active' : ''}`;
+          btn.onclick = () => { this.currentFilter = g; this.render(); };
+          this.filtersContainer.appendChild(btn);
+        });
+    } else {
+        this.filtersContainer.innerHTML = ''; // Czyścimy filtry dla widoku jednej grupy
+    }
+    // ---------------------
 
     const filtered = employees.filter(eid => {
       if (this.currentFilter === 'Wszyscy') return true;
@@ -242,9 +321,9 @@ class EmployeeCardEditor extends HTMLElement {
   }
 }
 
-customElements.define('employee-card-editor', EmployeeCardEditor);
-customElements.define('employee-card', EmployeeCard);
-customElements.define('employee-dashboard', EmployeeDashboard);
+if (!customElements.get('employee-card-editor')) { customElements.define('employee-card-editor', EmployeeCardEditor); }
+if (!customElements.get('employee-card')) { customElements.define('employee-card', EmployeeCard); }
+if (!customElements.get('employee-dashboard')) { customElements.define('employee-dashboard', EmployeeDashboard); }
 
 window.customCards = window.customCards || [];
 window.customCards.push({ type: "employee-card", name: "Pracownik (Pojedynczy)", description: "Jeden kafelek" });
