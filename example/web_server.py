@@ -6,6 +6,7 @@ import io
 import sqlite3
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, Response, send_file
+import shutil
 
 # --- KONFIGURACJA ---
 HARDCODED_TOKEN = ""
@@ -15,7 +16,7 @@ OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
 HISTORY_FILE = "/data/history.json"
 SOURCE_JS_FILE = "/employee-card.js"
-
+HA_WWW_PATH="/config/www/employee-card.js"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 USER_TOKEN_FROM_FILE = ""
 
@@ -25,23 +26,20 @@ try:
         USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
 except: pass
 
-if SUPERVISOR_TOKEN:
-    print(">>> UŻYWAM TOKENA SUPERVISORA (Tryb Wewnętrzny) <<<", flush=True)
-    TOKEN = SUPERVISOR_TOKEN
-    # Adres wewnętrzny Supervisora
-    API_URL = "http://supervisor/core/api" 
+if len(HARDCODED_TOKEN) > 50:
+    TOKEN = HARDCODED_TOKEN
+    API_URL = "http://homeassistant:8123/api"
+elif len(USER_TOKEN_FROM_FILE) > 50:
+    TOKEN = USER_TOKEN_FROM_FILE
+    API_URL = "http://172.30.32.1:8123/api"
 else:
-    # Fallback (tylko do testów lokalnych poza HA)
-    print(">>> BRAK TOKENA SUPERVISORA - UŻYWAM HARDCODED/PLIKU <<<", flush=True)
-    # ... tu twoja stara logika ...
-    TOKEN = "TWÓJ_TOKEN_LONG_LIVED_JEŚLI_POTRZEBNY"
-    API_URL = "http://homeassistant:8123/api" # To często nie działa wewnątrz kontenera
+    TOKEN = SUPERVISOR_TOKEN
+    API_URL = "http://supervisor/core/api"
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json",
 }
-
 app = Flask(__name__)
 
 # --- KONFIGURACJA SENSORÓW ---
