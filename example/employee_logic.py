@@ -196,22 +196,6 @@ def save_report_to_db(work_counters):
     except Exception as e:
         log(f"Błąd zapisu raportu: {e}")
 
-def wait_for_api():
-    """Funkcja wstrzymuje start do momentu nawiązania połączenia z HA"""
-    log(f"Sprawdzanie połączenia z API: {API_URL} ...")
-    while True:
-        try:
-            # Próbujemy pobrać cokolwiek, np. główny endpoint API
-            r = requests.get(f"{API_URL}/", headers=HEADERS, timeout=5)
-            # Jeśli serwer odpowiedział czymkolwiek (nawet błędem 401/405), to znaczy że żyje
-            if r.status_code in [200, 201, 401, 404, 405]:
-                log(">>> POŁĄCZENIE NAWIĄZANE! Startuję system. <<<")
-                return
-        except Exception:
-            pass
-        
-        log("Oczekiwanie na Home Assistant... (Ponowna próba za 5s)")
-        time.sleep(5)
 
 def main():
     wait_for_api()

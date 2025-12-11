@@ -22,24 +22,29 @@ USER_TOKEN_FROM_FILE = ""
 HA_WWW_DIR = "/config/www"
 DEST_JS_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
 CARD_URL_RESOURCE = "/local/employee-card.js"
-
+TOKEN = ""
+API_URL = ""
 
 
 try:
-    with open(OPTIONS_FILE, 'r') as f:
-        opts = json.load(f)
-        USER_TOKEN_FROM_FILE = opts.get("ha_token", "")
-except: pass
+    if os.path.exists(OPTIONS_FILE):
+        with open(OPTIONS_FILE, 'r') as f:
+            opts = json.load(f)
+            TOKEN = opts.get("ha_token", "").strip()
+except Exception as e:
+    print(f"Błąd odczytu opcji: {e}")
 
-if len(HARDCODED_TOKEN) > 50:
-    TOKEN = HARDCODED_TOKEN
-    API_URL = "http://homeassistant:8123/api"
-elif len(USER_TOKEN_FROM_FILE) > 50:
-    TOKEN = USER_TOKEN_FROM_FILE
+# 2. Wybór trybu działania
+if len(TOKEN) > 50:
+    # TRYB RĘCZNY (Pewny) - Używamy wewnętrznego IP Home Assistanta
+    # 172.30.32.1 to standardowy adres bramy Dockera w HAOS
     API_URL = "http://172.30.32.1:8123/api"
+    print(f">>> [INIT] TRYB RĘCZNY: Używam tokena użytkownika i adresu {API_URL} <<<", flush=True)
 else:
-    TOKEN = SUPERVISOR_TOKEN
+    # TRYB AUTOMATYCZNY (Supervisor) - Tylko jeśli nie podano tokena
+    TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
     API_URL = "http://supervisor/core/api"
+    print(">>> [INIT] TRYB SUPERVISOR: Próba użycia tokena systemowego <<<", flush=True)
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
@@ -82,6 +87,29 @@ BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time
 BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
 
 
+def wait_for_api():
+    """Funkcja wstrzymuje start do momentu nawiązania połączenia z HA"""
+    log(f"Sprawdzanie połączenia z API: {API_URL} ...")
+    while True:
+        try:
+            # Próbujemy pobrać status API
+            r = requests.get(f"{API_URL}/", headers=HEADERS, timeout=5)
+            
+            if r.status_code == 200 or r.status_code == 201:
+                log(">>> POŁĄCZENIE NAWIĄZANE! Startuję system. <<<")
+                return
+            elif r.status_code == 401:
+                log("!!! BŁĄD AUTORYZACJI (401) !!! Sprawdź czy token jest poprawny.")
+            else:
+                log(f"API odpowiedziało kodem: {r.status_code}")
+                
+        except requests.exceptions.ConnectionError:
+            log(f"Błąd połączenia: Nie można połączyć z {API_URL}")
+        except Exception as e:
+            log(f"Błąd ogólny API: {e}")
+        
+        log("Oczekiwanie na Home Assistant... (Ponowna próba za 10s)")
+        time.sleep(10)
 
 def register_lovelace_resource():
     """
