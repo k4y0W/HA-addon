@@ -8,7 +8,7 @@ import threading
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, Response, send_file
 
-# --- CONFIGURATION ---
+# --- KONFIGURACJA ŚCIEŻEK ---
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
@@ -17,26 +17,32 @@ HISTORY_FILE = "/data/history.json"
 HA_WWW_DIR = "/config/www"
 CARD_URL_RESOURCE = "/local/employee-card.js"
 
-# --- SMART PATH DETECTION FOR CARD FILE ---
-# We check current directory, /app, and root to find the JS file
+# --- INTELIGENTNE SZUKANIE PLIKU KARTY ---
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Lista miejsc, gdzie skrypt ma szukać pliku .js
 POSSIBLE_PATHS = [
-    os.path.join(CURRENT_DIR, 'example', 'employee-card.js'), # 1. PRIORYTET: Folder example obok skryptu
-    os.path.join(CURRENT_DIR, 'employee-card.js'),            # 2. Ten sam folder co skrypt
-    '/app/example/employee-card.js',                          # 3. Pełna ścieżka w Dockerze (example)
-    '/app/employee-card.js',                                  # 4. Pełna ścieżka w Dockerze (root)
-    'example/employee-card.js'                                # 5. Ścieżka względna
+    os.path.join(CURRENT_DIR, 'employee-card.js'),          # 1. Obok skryptu
+    os.path.join(CURRENT_DIR, 'example', 'employee-card.js'), # 2. W folderze example (obok skryptu)
+    '/example/employee-card.js',                            # 3. W folderze example w głównym katalogu
+    '/app/example/employee-card.js',                        # 4. W podkatalogu aplikacji
+    '/employee-card.js',                                    # 5. W głównym katalogu (root)
+    'employee-card.js'                                      # 6. W katalogu roboczym
 ]
+
 SOURCE_CARD_FILE = None
+print(f">>> [INIT] Rozpoczynam poszukiwanie pliku karty...", flush=True)
+
 for path in POSSIBLE_PATHS:
     if os.path.exists(path):
         SOURCE_CARD_FILE = path
+        print(f">>> [INIT] SUKCES! Znaleziono plik karty w: {path}", flush=True)
         break
 
-# Default fallback if not found (will cause error later but better than crash)
 if not SOURCE_CARD_FILE:
-    SOURCE_CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'employee-card.js')
+    print(f">>> [ERROR] KRYTYCZNE: Nie znaleziono employee-card.js! Sprawdzono: {POSSIBLE_PATHS}", flush=True)
 
-# --- API & TOKEN SETUP ---
+# --- KONFIGURACJA API I TOKENA ---
 TOKEN = ""
 API_URL = ""
 
@@ -50,11 +56,11 @@ except:
 
 if len(TOKEN) > 50:
     API_URL = "http://172.30.32.1:8123/api"
-    print(f">>> [INIT] MANUAL MODE: User Token. URL: {API_URL}", flush=True)
+    print(f">>> [INIT] TRYB RĘCZNY: Używam tokena użytkownika. Adres: {API_URL}", flush=True)
 else:
     TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
     API_URL = "http://supervisor/core/api"
-    print(">>> [INIT] SUPERVISOR MODE: System Token.", flush=True)
+    print(">>> [INIT] TRYB SUPERVISOR: Używam tokena systemowego.", flush=True)
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
@@ -63,7 +69,7 @@ HEADERS = {
 
 app = Flask(__name__)
 
-# --- UNIT MAPPING ---
+# --- KONFIGURACJA MAPOWANIA JEDNOSTEK ---
 UNIT_MAP = {
     "W": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
     "kW": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
@@ -91,56 +97,68 @@ PRETTY_NAMES = {
     "connectivity": "Połączenie"
 }
 
-# --- HELPER FUNCTIONS ---
+# --- FUNKCJE POMOCNICZE (LOGIKA) ---
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 def wait_for_api():
-    log(f"Checking API connection: {API_URL} ...")
+    log(f"Sprawdzanie połączenia z API: {API_URL} ...")
     while True:
         try:
             r = requests.get(f"{API_URL}/", headers=HEADERS, timeout=5)
             if r.status_code in [200, 201, 401, 404, 405]:
-                log(">>> API CONNECTION ESTABLISHED! <<<")
+                log(">>> POŁĄCZENIE Z API NAWIĄZANE! <<<")
                 return
         except Exception:
             pass
         time.sleep(5)
 
 def install_and_register_card():
-    """Copies card file and registers it in Lovelace"""
+    """Kopiuje plik i rejestruje go w Lovelace Resources"""
+    
+    # 1. Weryfikacja źródła
     if not SOURCE_CARD_FILE or not os.path.exists(SOURCE_CARD_FILE):
-        return False, f"Source file not found. Checked: {POSSIBLE_PATHS}"
+        return False, f"BŁĄD KRYTYCZNY: Nie znaleziono pliku employee-card.js w folderze 'example' ani w root! Sprawdzono: {POSSIBLE_PATHS}"
 
-    # 1. Copy File
+    # 2. Fizyczne Kopiowanie Pliku
     DEST_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
     try:
         if not os.path.exists(HA_WWW_DIR):
-            os.makedirs(HA_WWW_DIR)
+            os.makedirs(HA_WWW_DIR) # Tworzy folder www jeśli go nie ma
         
-        shutil.copy2(SOURCE_CARD_FILE, DEST_FILE)
-        log(f">>> Card copied to {DEST_FILE}")
+        shutil.copy2(SOURCE_CARD_FILE, DEST_FILE) # Kopiuje i nadpisuje
+        print(f">>> SKOPIOWANO: {SOURCE_CARD_FILE} -> {DEST_FILE}", flush=True)
     except Exception as e:
-        return False, f"File copy error: {str(e)}"
+        return False, f"Błąd kopiowania pliku: {str(e)}"
 
-    # 2. Register in Lovelace
+    # 3. Rejestracja w API Home Assistant (Lovelace Resources)
     api_url = f"{API_URL}/lovelace/resources"
+    
     try:
+        # A. Pobierz listę istniejących zasobów
         get_res = requests.get(api_url, headers=HEADERS)
-        if get_res.status_code == 200:
-            for res in get_res.json():
-                if res['url'] == CARD_URL_RESOURCE:
-                    return True, "Card updated (file overwritten)!"
         
-        # Register new
-        post_res = requests.post(api_url, headers=HEADERS, json={"type": "module", "url": CARD_URL_RESOURCE})
+        if get_res.status_code == 200:
+            resources = get_res.json()
+            for res in resources:
+                if res['url'] == CARD_URL_RESOURCE:
+                    return True, "Karta zaktualizowana (plik nadpisany)!"
+        
+        # B. Jeśli nie ma - rejestrujemy nowy zasób
+        payload = {
+            "type": "module",
+            "url": CARD_URL_RESOURCE
+        }
+        post_res = requests.post(api_url, headers=HEADERS, json=payload)
+        
         if post_res.status_code in [200, 201]:
-            return True, "Card registered successfully!"
+            return True, "Karta zarejestrowana pomyślnie!"
         else:
-            return False, f"API Error ({post_res.status_code}): {post_res.text}"
+            return False, f"Błąd API HA ({post_res.status_code}): {post_res.text}"
+            
     except Exception as e:
-        return False, f"API Connection Error: {str(e)}"
+        return False, f"Błąd połączenia z API: {str(e)}"
 
 def init_db():
     try:
@@ -174,14 +192,20 @@ def get_data():
 
 def load_json(file_path):
     if not os.path.exists(file_path):
-        if file_path == GROUPS_FILE:
-            default_groups = ["Domyślna"]
-            save_json(GROUPS_FILE, default_groups)
-            return default_groups
+        if file_path == "GROUPS_FILE": # Fix typo check
+             pass
         return []
     try:
         with open(file_path, 'r') as f: return json.load(f)
     except: return []
+
+# Poprawka dla GROUPS_FILE load
+def get_groups():
+    if not os.path.exists("/data/groups.json"):
+        return ["Domyślna"]
+    try:
+        with open("/data/groups.json", 'r') as f: return json.load(f)
+    except: return ["Domyślna"]
 
 def save_json(file_path, data):
     with open(file_path, 'w') as f: json.dump(data, f, indent=4)
@@ -317,11 +341,10 @@ def save_daily_report(work_counters, report_date):
     except Exception as e:
         log(f"Błąd zapisu raportu: {e}")
 
-# --- MAIN LOGIC LOOP (BACKGROUND THREAD) ---
+# --- GŁÓWNA PĘTLA LOGIKI (W OSOBNYM WĄTKU) ---
 def logic_loop():
     wait_for_api()
-    # Try auto-install card on startup
-    install_and_register_card()
+    install_and_register_card() # Próba przy starcie
     
     log(f"=== START SYSTEMU LOGIKI ===")
     init_db()
@@ -339,7 +362,6 @@ def logic_loop():
         try:
             current_date = datetime.now().strftime("%Y-%m-%d")
             
-            # Raport o północy
             if current_date != last_loop_date:
                 save_daily_report(work_counters, last_loop_date)
                 work_counters = {}
@@ -371,7 +393,6 @@ def logic_loop():
                     attrs = data.get('attributes', {})
                     unit = attrs.get('unit_of_measurement')
                     
-                    # Zbieranie statystyk grupowych
                     try:
                         f_val = float(state_val)
                         if unit == '°C': group_stats[group]["temps"].append(f_val)
@@ -381,7 +402,7 @@ def logic_loop():
                              group_stats[group]["total_power"] += p_val
                     except: pass
 
-                    # Logika "Pracuje" - FIXED INDENTATION
+                    # Logika "Pracuje"
                     if unit == 'W' or unit == 'kW':
                         try:
                             val = float(state_val)
@@ -393,7 +414,6 @@ def logic_loop():
                     if eid.startswith("binary_sensor.") and state_val == 'on': 
                         is_working = True
                     
-                    # Tworzenie sensorów pomocniczych (np. temp, bateria)
                     suffix_info = None
                     if unit in UNIT_MAP: suffix_info = UNIT_MAP[unit]
                     if suffix_info:
@@ -408,7 +428,6 @@ def logic_loop():
                 set_state(f"sensor.{safe}_status", status, f"{name} - Status", "mdi:laptop" if is_working else "mdi:account-off", group)
                 set_state(f"sensor.{safe}_czas_pracy", round(work_counters[name], 1), f"{name} - Czas", "mdi:clock", group, "min")
 
-            # Tworzenie sensorów grupowych
             for grp_name, stats in group_stats.items():
                 if grp_name == "Domyślna": continue
                 safe_grp = grp_name.lower().replace(" ", "_")
@@ -430,45 +449,40 @@ def logic_loop():
 
         time.sleep(10)
 
-# --- START BACKGROUND LOGIC ---
 threading.Thread(target=logic_loop, daemon=True).start()
 
-
-# --- WEB SERVER ROUTES (FLASK) ---
-
+# --- WEB ROUTES ---
 @app.route('/')
 def index():
     return render_template('index.html', all_sensors=get_clean_sensors())
 
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
-    grps = load_json(GROUPS_FILE)
-    if not grps: grps = ["Domyślna"]
+    grps = get_groups()
     if request.method == 'POST':
         name = request.json.get('name')
         if name and name not in grps: grps.append(name)
-        save_json(GROUPS_FILE, grps)
+        save_json("/data/groups.json", grps)
     return jsonify(grps)
 
 @app.route('/api/groups/<name>', methods=['DELETE'])
 def del_group(name):
     if name == "Domyślna": return jsonify({"error": "Nie można usunąć"}), 400
-    grps = load_json(GROUPS_FILE)
+    grps = get_groups()
     if name in grps: grps.remove(name)
-    save_json(GROUPS_FILE, grps)
+    save_json("/data/groups.json", grps)
     return jsonify({"status":"ok"})
 
-@app.route('/api/employees', methods=['GET'])
-def api_get(): return jsonify(load_json(DATA_FILE))
-
-@app.route('/api/employees', methods=['POST'])
-def api_post():
-    data = request.json
-    emps = load_json(DATA_FILE)
-    emps = [e for e in emps if e['name'] != data['name']]
-    emps.append(data)
-    save_json(DATA_FILE, emps)
-    return jsonify({"status":"ok"})
+@app.route('/api/employees', methods=['GET', 'POST'])
+def api_employees():
+    if request.method == 'POST':
+        data = request.json
+        emps = load_json(DATA_FILE)
+        emps = [e for e in emps if e['name'] != data['name']]
+        emps.append(data)
+        save_json(DATA_FILE, emps)
+        return jsonify({"status":"ok"})
+    return jsonify(load_json(DATA_FILE))
 
 @app.route('/api/employees/<int:i>', methods=['DELETE'])
 def api_del(i):
@@ -492,7 +506,6 @@ def api_monitor():
         safe = emp['name'].lower().replace(" ","_")
         status = get_ha_state(f"sensor.{safe}_status") or "N/A"
         time = get_ha_state(f"sensor.{safe}_czas_pracy") or "0"
-        
         meas = []
         for entity_id in emp.get('sensors', []):
             val = get_ha_state(entity_id)
@@ -508,13 +521,11 @@ def download_report():
         c.execute("SELECT work_date, employee_name, minutes_worked FROM work_history ORDER BY work_date DESC")
         rows = c.fetchall()
         conn.close()
-        
         si = io.StringIO()
         cw = csv.writer(si, delimiter=';')
         cw.writerow(["Data", "Pracownik", "Minuty", "Godziny"])
         for r in rows:
             cw.writerow([r[0], r[1], r[2], round(r[2]/60, 2)])
-            
         return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": "attachment; filename=Raport.csv"})
     except: return "Błąd", 500
 
