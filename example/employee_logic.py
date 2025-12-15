@@ -20,12 +20,12 @@ CARD_URL_RESOURCE = "/local/employee-card.js"
 # --- SMART PATH DETECTION FOR CARD FILE ---
 # We check current directory, /app, and root to find the JS file
 POSSIBLE_PATHS = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'employee-card.js'),
-    '/app/employee-card.js',
-    '/employee-card.js',
-    'employee-card.js'
+    os.path.join(CURRENT_DIR, 'example', 'employee-card.js'), # 1. PRIORYTET: Folder example obok skryptu
+    os.path.join(CURRENT_DIR, 'employee-card.js'),            # 2. Ten sam folder co skrypt
+    '/app/example/employee-card.js',                          # 3. Pełna ścieżka w Dockerze (example)
+    '/app/employee-card.js',                                  # 4. Pełna ścieżka w Dockerze (root)
+    'example/employee-card.js'                                # 5. Ścieżka względna
 ]
-
 SOURCE_CARD_FILE = None
 for path in POSSIBLE_PATHS:
     if os.path.exists(path):
