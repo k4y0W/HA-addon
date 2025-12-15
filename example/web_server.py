@@ -181,6 +181,57 @@ def register_lovelace_resource():
     except Exception as e: 
         return False, f"Wyjątek API: {str(e)}"
 
+
+def install_and_register_card():
+    """Kopiuje plik i rejestruje go w Lovelace Resources"""
+    
+    # 1. Ścieżki
+    SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'employee-card.js')
+    DEST_DIR = "/config/www"
+    DEST_FILE = os.path.join(DEST_DIR, "employee-card.js")
+    RESOURCE_URL = "/local/employee-card.js"
+
+    # 2. Fizyczne Kopiowanie Pliku
+    try:
+        if not os.path.exists(DEST_DIR):
+            os.makedirs(DEST_DIR) # Tworzy folder www jeśli go nie ma
+        
+        shutil.copy2(SOURCE, DEST_FILE) # Kopiuje i nadpisuje jeśli istnieje
+        print(f">>> SKOPIOWANO: {SOURCE} -> {DEST_FILE}", flush=True)
+    except Exception as e:
+        return False, f"Błąd kopiowania pliku: {str(e)}"
+
+    # 3. Rejestracja w API Home Assistant (Lovelace Resources)
+    # Używamy API Supervisora, które jest najbezpieczniejsze
+    api_url = f"{API_URL}/lovelace/resources"
+    
+    try:
+        # A. Pobierz listę istniejących zasobów, żeby nie dublować
+        get_res = requests.get(api_url, headers=HEADERS)
+        
+        if get_res.status_code == 200:
+            resources = get_res.json()
+            for res in resources:
+                if res['url'] == RESOURCE_URL:
+                    # Jeśli już jest, to aktualizujemy (opcjonalne, ale dobre dla refreshu)
+                    # Wystarczy, że plik fizyczny został nadpisany w kroku 2
+                    return True, "Karta zaktualizowana (plik nadpisany)!"
+        
+        # B. Jeśli nie ma - rejestrujemy nowy zasób
+        payload = {
+            "type": "module",
+            "url": RESOURCE_URL
+        }
+        post_res = requests.post(api_url, headers=HEADERS, json=payload)
+        
+        if post_res.status_code in [200, 201]:
+            return True, "Karta zarejestrowana pomyślnie!"
+        else:
+            return False, f"Błąd API HA ({post_res.status_code}): {post_res.text}"
+            
+    except Exception as e:
+        return False, f"Błąd połączenia z API: {str(e)}"
+
 # --- ENDPOINTY FLASK ---
 @app.route('/')
 def index():
@@ -247,9 +298,13 @@ def api_monitor():
 
 @app.route('/api/install_card', methods=['POST'])
 def api_install_card():
-    success, msg = register_lovelace_resource()
-    return jsonify({"success": success, "message": msg})
-
+    # Wywołujemy naszą potężną funkcję
+    success, msg = install_and_register_card()
+    
+    if success:
+        return jsonify({"success": True, "message": msg})
+    else:
+        return jsonify({"success": False, "message": msg}), 500
 @app.route('/api/history', methods=['GET'])
 def api_history():
     return jsonify(load_json(HISTORY_FILE))

@@ -180,17 +180,7 @@
                     </div>
                 </div>
             </div>
-            <div class="mb-3">
-                <label class="form-label fw-bold">Uprawnienia</label>
-                <select class="form-select" id="empRole">
-                    <option value="user">Pracownik (Tylko światło)</option>
-                    <option value="admin">Administrator (Pełna kontrola + Temp)</option>
-                </select>
-            </div>
-            <div class="mb-3" id="pinContainer" style="display:none;">
-                <label class="form-label fw-bold">Kod PIN (do akcji Admina)</label>
-                <input type="password" class="form-control" id="empPin" placeholder="np. 1234" maxlength="4">
-            </div>
+            
             <div class="mb-3">
                 <label class="form-label fw-bold">Próg mocy (W)</label>
                 <input type="number" class="form-control" id="empThreshold" value="20" placeholder="Domyślnie 20">
@@ -276,16 +266,34 @@
         }
 
         async function installCard() {
-            const btn = document.getElementById('tab-install');
-            const originalText = btn.innerHTML; btn.innerHTML = '⏳ ...';
-            try {
-                const res = await fetch('api/install_card', { method: 'POST' });
-                const data = await res.json();
-                if (data.success) alert("SUKCES! " + data.message + "\\n\\nOdśwież stronę (Ctrl+F5)!");
-                else installModal.show();
-            } catch (e) { installModal.show(); }
-            btn.innerHTML = originalText;
+        const btn = document.getElementById('tab-install');
+        const originalText = btn.innerHTML; 
+        btn.innerHTML = '⏳ Instalowanie...';
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('api/install_card', { method: 'POST' });
+            const data = await res.json();
+            
+            if(data.success) {
+                // Sukces - prosimy o odświeżenie
+                if(confirm("SUKCES! " + data.message + "\n\nSystem wymaga przeładowania, aby załadować nową kartę.\nCzy chcesz odświeżyć stronę teraz?")) {
+                    location.reload(true);
+                }
+            } else {
+                // Błąd serwera
+                alert("BŁĄD: " + data.message);
+                // Opcjonalnie pokaż modal z instrukcją ręczną
+                installModal.show(); 
+            }
+        } catch (e) { 
+            alert("Błąd krytyczny połączenia: " + e);
+            installModal.show();
         }
+        
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+    }
 
         // --- RENDEROWANIE LISTY SENSORÓW ---
         function renderSensorList(filterText = "") {
@@ -433,54 +441,28 @@
             `).join('');
             }
         }
-        
+
         const addForm = document.getElementById('addForm');
         if (addForm) {
             addForm.onsubmit = async (e) => {
-    e.preventDefault();
-    const name = document.getElementById('empName').value;
-    const group = document.getElementById('empGroup').value;
-    
-    // --- NOWE ---
-    const role = document.getElementById('empRole').value;
-    const pin = document.getElementById('empPin').value;
-    // ------------
+                e.preventDefault();
+                const name = document.getElementById('empName').value;
+                const group = document.getElementById('empGroup').value;
+                const selected = [];
 
-    const selected = [];
-    if(chkContainer) {
-        chkContainer.querySelectorAll('input:checked').forEach(c => selected.push(c.value));
-    }
-    
-    if(selected.length === 0) {
-        alert("Błąd: Wybierz czujniki!");
-        return;
-    }
+                if (chkContainer) {
+                    chkContainer.querySelectorAll('input:checked').forEach(c => selected.push(c.value));
+                }
 
-    // Walidacja PINu dla admina
-    if (role === 'admin' && pin.length < 4) {
-        alert("Kierownik musi mieć 4-cyfrowy PIN!");
-        return;
-    }
+                if (selected.length === 0) {
+                    alert("Błąd: Musisz wybrać przynajmniej jeden czujnik!");
+                    return;
+                }
 
-    await fetch('api/employees', { 
-        method: 'POST', 
-        headers: {'Content-Type': 'application/json'}, 
-        body: JSON.stringify({
-            name: name, 
-            group: group, 
-            sensors: selected,
-            // --- NOWE ---
-            role: role,
-            pin: pin
-            // ------------
-        }) 
-    });
-    
-    // Reset formularza
-    document.getElementById('empName').value = '';
-    document.getElementById('empPin').value = ''; 
-    renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
-};
+                await fetch('api/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name, group: group, sensors: selected,threshold: threshold }) });
+                document.getElementById('empName').value = '';
+                renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
+            };
         }
 
         window.del = async (i) => { if (confirm("Usunąć?")) { await fetch('api/employees/' + i, { method: 'DELETE' }); loadConfig(); refreshMonitorData(); } }
@@ -533,12 +515,6 @@
 
         // Listener do Historii (z zabezpieczeniem ?)
         document.getElementById('tab-history')?.addEventListener('shown.bs.tab', loadHistory);
-
-        document.getElementById('empRole').addEventListener('change', function() {
-            const pinDiv = document.getElementById('pinContainer');
-                if(this.value === 'admin') pinDiv.style.display = 'block';
-                else pinDiv.style.display = 'none';
-        });
 
         // --- INICJALIZACJA ---
         renderSensorList();

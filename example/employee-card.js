@@ -199,6 +199,7 @@ async function loadHistoryWEB() {
     container.innerHTML = '<div class="p-4 text-danger">Błąd ładowania historii.</div>';
   }
 }
+// Ten event listener zadziała w kontekście Add-onu
 if(document.getElementById('tab-history')) {
     document.getElementById('tab-history').addEventListener('shown.bs.tab', loadHistoryWEB);
 }
