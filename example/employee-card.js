@@ -44,7 +44,6 @@ const SHARED_STYLES = `
   .info { flex: 1; }
   .emp-name { font-weight: 800; font-size: 1.3rem; color: var(--primary-text-color); line-height: 1.2; }
   .emp-status { font-size: 1rem; color: var(--secondary-text-color); font-weight: 600; margin-top: 2px; }
-  .emp-group { font-size: 0.75rem; color: var(--secondary-text-color); background: var(--secondary-background-color); padding: 2px 8px; border-radius: 4px; display: inline-block; margin-top: 4px; border: 1px solid var(--divider-color); }
 
   .stats { text-align: right; min-width: 80px; }
   .time-val { font-size: 1.6rem; font-weight: 900; color: var(--primary-text-color); }
@@ -65,17 +64,6 @@ const SHARED_STYLES = `
     box-shadow: 0 1px 2px rgba(0,0,0,0.05);
   }
   .sensor-chip ha-icon { --mdc-icon-size: 18px; margin-right: 6px; color: var(--secondary-text-color); }
-
-  .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 10px; scrollbar-width: none; }
-  .filter-btn {
-    border: none; background: var(--card-background-color); 
-    box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,0.1));
-    padding: 8px 16px; border-radius: 20px; font-weight: 600; color: var(--primary-text-color);
-    cursor: pointer; white-space: nowrap; transition: all 0.2s;
-    border: 1px solid var(--divider-color, transparent);
-  }
-  .filter-btn:hover { background: var(--secondary-background-color); }
-  .filter-btn.active { background: var(--primary-color); color: white; }
 `;
 
 function renderEmployeeHTML(hass, entityId) {
@@ -83,7 +71,6 @@ function renderEmployeeHTML(hass, entityId) {
   if (!statusEntity) return '';
 
   const fullName = statusEntity.attributes.friendly_name.replace(' - Status', '');
-  const groupName = statusEntity.attributes.group || 'Domyślna';
   const baseId = entityId.replace('_status', '');
   const state = statusEntity.state;
 
@@ -114,13 +101,12 @@ function renderEmployeeHTML(hass, entityId) {
   });
 
   return `
-    <div class="emp-card" data-group="${groupName}">
+    <div class="emp-card">
       <div class="header">
         <div class="icon-box ${statusClass}"><ha-icon icon="${iconName}"></ha-icon></div>
         <div class="info">
           <div class="emp-name">${fullName}</div>
           <div class="emp-status">${state}</div>
-          <div class="emp-group">${groupName}</div>
         </div>
         <div class="stats">
           <div class="time-val">${timeVal}</div>
@@ -133,90 +119,10 @@ function renderEmployeeHTML(hass, entityId) {
   `;
 }
 
-// --- NOWA FUNKCJA HISTORII DO PANELU WEB ---
-// Wywoływana z poziomu index.html (jeśli korzystasz) lub Dashboardu
-async function loadHistoryWEB() {
-  const container = document.getElementById('history-container');
-  if(!container) return;
-  container.innerHTML = '<div class="p-4 text-center">Pobieranie danych...</div>';
-
-  try {
-    const res = await fetch('api/history');
-    const data = await res.json();
-    if (!data || data.length === 0) {
-      container.innerHTML = '<div class="p-4 text-center text-muted">Brak raportów w bazie.</div>';
-      return;
-    }
-
-    let html = '';
-    data.forEach(report => {
-      // Sekcja Analizy Grup
-      let groupAnalysisHtml = '';
-      if(report.group_summary && report.group_summary.length > 0) {
-          groupAnalysisHtml = `
-          <div class="mb-3 p-2 bg-light rounded border">
-              <h6 class="fw-bold text-dark">📊 Analiza Pomieszczeń</h6>
-              <table class="table table-sm table-striped mb-0" style="font-size:0.9rem">
-                  <thead><tr><th>Grupa / Pokój</th><th>Łącznie Godzin</th><th>Średnia / Os.</th></tr></thead>
-                  <tbody>
-                      ${report.group_summary.map(g => `
-                          <tr>
-                              <td><strong>${g.group}</strong></td>
-                              <td>${g.total_hours} h</td>
-                              <td>${g.avg_per_person} min</td>
-                          </tr>
-                      `).join('')}
-                  </tbody>
-              </table>
-          </div>`;
-      }
-
-      html += `
-            <div class="border-bottom p-3">
-                <div class="d-flex justify-content-between mb-2">
-                    <strong class="text-primary fs-5">${report.date}</strong>
-                    <span class="badge bg-secondary">ID: ${report.id}</span>
-                </div>
-                ${groupAnalysisHtml}
-                <table class="table table-sm table-bordered mb-0">
-                    <thead class="table-light">
-                        <tr><th>Grupa</th><th>Pracownik</th><th>Czas pracy</th></tr>
-                    </thead>
-                    <tbody>
-                        ${report.entries.map(e => `
-                            <tr>
-                                <td class="fw-bold text-secondary">${e.group}</td>
-                                <td>${e.name}</td>
-                                <td>${e.work_time} min</td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>`;
-    });
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = '<div class="p-4 text-danger">Błąd ładowania historii.</div>';
-  }
-}
-// Ten event listener zadziała w kontekście Add-onu
-if(document.getElementById('tab-history')) {
-    document.getElementById('tab-history').addEventListener('shown.bs.tab', loadHistoryWEB);
-}
-// -------------------------------------------
-
 class EmployeeDashboard extends HTMLElement {
   setConfig(config) {
     this.config = config;
     this.title = config.title || "Zespół";
-    // Jeśli w konfiguracji podano grupę, ustawiamy ją na sztywno
-    if (config.group) {
-        this.currentFilter = config.group;
-        this.fixedGroup = true;
-    } else {
-        this.currentFilter = 'Wszyscy';
-        this.fixedGroup = false;
-    }
   }
 
   set hass(hass) {
@@ -234,13 +140,10 @@ class EmployeeDashboard extends HTMLElement {
           .dash-title { font-size: 1.4rem; font-weight: 800; margin-bottom: 15px; color: var(--primary-text-color); padding-left: 5px; }
         </style>
         <div class="dash-title">${this.title}</div>
-        <div id="filters" class="filter-bar"></div>
         <div id="dashboard-content" class="dashboard-container">Ładowanie...</div>
       `;
       this.content = this.querySelector('#dashboard-content');
-      this.filtersContainer = this.querySelector('#filters');
     }
-
     this.render();
   }
 
@@ -252,40 +155,8 @@ class EmployeeDashboard extends HTMLElement {
 
     if (employees.length === 0) {
       this.content.innerHTML = "<div style='padding:20px;opacity:0.6'>Brak pracowników.</div>";
-      return;
-    }
-
-    // --- LOGIKA FILTRÓW ---
-    // Jeśli mamy sztywną grupę (fixedGroup), NIE rysujemy przycisków filtrów
-    if (!this.fixedGroup) {
-        const groups = new Set(['Wszyscy']);
-        employees.forEach(eid => {
-          const g = hass.states[eid].attributes.group;
-          if (g) groups.add(g);
-        });
-
-        this.filtersContainer.innerHTML = '';
-        groups.forEach(g => {
-          const btn = document.createElement('button');
-          btn.innerText = g;
-          btn.className = `filter-btn ${this.currentFilter === g ? 'active' : ''}`;
-          btn.onclick = () => { this.currentFilter = g; this.render(); };
-          this.filtersContainer.appendChild(btn);
-        });
     } else {
-        this.filtersContainer.innerHTML = ''; // Czyścimy filtry dla widoku jednej grupy
-    }
-    // ---------------------
-
-    const filtered = employees.filter(eid => {
-      if (this.currentFilter === 'Wszyscy') return true;
-      return hass.states[eid].attributes.group === this.currentFilter;
-    });
-
-    if (filtered.length === 0) {
-      this.content.innerHTML = `<div style='padding:20px;opacity:0.6'>Brak pracowników w grupie ${this.currentFilter}.</div>`;
-    } else {
-      this.content.innerHTML = filtered.map(eid => renderEmployeeHTML(hass, eid)).join('');
+      this.content.innerHTML = employees.map(eid => renderEmployeeHTML(hass, eid)).join('');
     }
   }
   getCardSize() { return 3; }
