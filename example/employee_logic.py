@@ -1,11 +1,12 @@
-import os
-import time
-import requests
 import json
-import sys
+import os
+import requests
 import sqlite3
 import shutil
+import time
+import threading
 from datetime import datetime
+from flask import Flask, request, jsonify, render_template, Response, send_file
 
 # --- KONFIGURACJA PLIKÓW ---
 DATA_FILE = "/data/employees.json"
@@ -13,15 +14,15 @@ STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
 HISTORY_FILE = "/data/history.json"
-SOURCE_JS_FILE = "/app/employee-card.js"
+SOURCE_CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'employee-card.js')
 HA_WWW_DIR = "/config/www"
-DEST_JS_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
 CARD_URL_RESOURCE = "/local/employee-card.js"
 
 # --- KONFIGURACJA API I TOKENA ---
 TOKEN = ""
 API_URL = ""
 
+# Próba odczytu tokena z opcji
 try:
     if os.path.exists(OPTIONS_FILE):
         with open(OPTIONS_FILE, 'r') as f:
@@ -30,19 +31,23 @@ try:
 except:
     pass
 
+# Decyzja o trybie (Supervisor vs Token Użytkownika)
 if len(TOKEN) > 50:
     API_URL = "http://172.30.32.1:8123/api"
-    print(f">>> [LOGIC] TRYB RĘCZNY: Używam tokena użytkownika. Adres: {API_URL}", flush=True)
+    print(f">>> [INIT] TRYB RĘCZNY: Używam tokena użytkownika. Adres: {API_URL}", flush=True)
 else:
     TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
     API_URL = "http://supervisor/core/api"
-    print(">>> [LOGIC] TRYB SUPERVISOR: Używam tokena systemowego.", flush=True)
+    print(">>> [INIT] TRYB SUPERVISOR: Używam tokena systemowego.", flush=True)
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json",
 }
 
+app = Flask(__name__)
+
+# --- KONFIGURACJA MAPOWANIA JEDNOSTEK ---
 UNIT_MAP = {
     "W": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
     "kW": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
@@ -55,6 +60,22 @@ UNIT_MAP = {
 }
 
 MANAGED_SUFFIXES = ["_status", "_czas_pracy"]
+GLOBAL_BLACKLIST = [
+    "indicator", "light", "led", "display", "lock", "child", "physical control",     
+    "filter", "life", "used time", "alarm", "error", "fault", "problem",     
+    "update", "install", "version", "identify", "zidentyfikuj", "info",
+    "iphone", "ipad", "phone", "mobile", "router", "gateway", "brama"      
+]
+BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo.", "button.", "input_"]
+BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
+PRETTY_NAMES = {
+    "temperature": "Temperatura", "humidity": "Wilgotność", "pressure": "Ciśnienie",
+    "power": "Moc", "energy": "Energia", "voltage": "Napięcie", "current": "Natężenie",
+    "battery": "Bateria", "signal_strength": "Sygnał", "pm25": "PM 2.5", "illuminance": "Jasność",
+    "connectivity": "Połączenie"
+}
+
+# --- FUNKCJE POMOCNICZE (LOGIKA) ---
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -65,27 +86,61 @@ def wait_for_api():
         try:
             r = requests.get(f"{API_URL}/", headers=HEADERS, timeout=5)
             if r.status_code in [200, 201, 401, 404, 405]:
-                log(">>> POŁĄCZENIE NAWIĄZANE! Startuję logikę sensorów. <<<")
+                log(">>> POŁĄCZENIE Z API NAWIĄZANE! <<<")
                 return
         except Exception:
             pass
-        time.sleep(10)
+        time.sleep(5)
 
-def auto_install_card():
+def install_and_register_card():
+    """Kopiuje plik i rejestruje go w Lovelace Resources"""
+    
+    # 1. Ścieżki
+    SOURCE = SOURCE_CARD_FILE
+    DEST_DIR = HA_WWW_DIR
+    DEST_FILE = os.path.join(DEST_DIR, "employee-card.js")
+    RESOURCE_URL = CARD_URL_RESOURCE
+
+    # 2. Fizyczne Kopiowanie Pliku
     try:
-        if not os.path.exists(HA_WWW_DIR): os.makedirs(HA_WWW_DIR)
-        shutil.copy(SOURCE_JS_FILE, DEST_JS_FILE)
-    except: pass
+        if not os.path.exists(DEST_DIR):
+            os.makedirs(DEST_DIR) # Tworzy folder www jeśli go nie ma
+        
+        if os.path.exists(SOURCE):
+            shutil.copy2(SOURCE, DEST_FILE) # Kopiuje i nadpisuje jeśli istnieje
+            print(f">>> SKOPIOWANO: {SOURCE} -> {DEST_FILE}", flush=True)
+        else:
+            return False, f"Brak pliku źródłowego: {SOURCE}"
+    except Exception as e:
+        return False, f"Błąd kopiowania pliku: {str(e)}"
+
+    # 3. Rejestracja w API Home Assistant (Lovelace Resources)
+    api_url = f"{API_URL}/lovelace/resources"
     
     try:
-        url = f"{API_URL}/lovelace/resources"
-        get_resp = requests.get(url, headers=HEADERS)
-        if get_resp.status_code == 200:
-            for res in get_resp.json():
-                if res['url'] == CARD_URL_RESOURCE: return
+        # A. Pobierz listę istniejących zasobów, żeby nie dublować
+        get_res = requests.get(api_url, headers=HEADERS)
         
-        requests.post(url, headers=HEADERS, json={"url": CARD_URL_RESOURCE, "type": "module"})
-    except: pass
+        if get_res.status_code == 200:
+            resources = get_res.json()
+            for res in resources:
+                if res['url'] == RESOURCE_URL:
+                    return True, "Karta zaktualizowana (plik nadpisany)!"
+        
+        # B. Jeśli nie ma - rejestrujemy nowy zasób
+        payload = {
+            "type": "module",
+            "url": RESOURCE_URL
+        }
+        post_res = requests.post(api_url, headers=HEADERS, json=payload)
+        
+        if post_res.status_code in [200, 201]:
+            return True, "Karta zarejestrowana pomyślnie!"
+        else:
+            return False, f"Błąd API HA ({post_res.status_code}): {post_res.text}"
+            
+    except Exception as e:
+        return False, f"Błąd połączenia z API: {str(e)}"
 
 def init_db():
     try:
@@ -117,6 +172,20 @@ def get_data():
         with open(DATA_FILE, 'r') as f: return json.load(f)
     except: return []
 
+def load_json(file_path):
+    if not os.path.exists(file_path):
+        if file_path == GROUPS_FILE:
+            default_groups = ["Domyślna"]
+            save_json(GROUPS_FILE, default_groups)
+            return default_groups
+        return []
+    try:
+        with open(file_path, 'r') as f: return json.load(f)
+    except: return []
+
+def save_json(file_path, data):
+    with open(file_path, 'w') as f: json.dump(data, f, indent=4)
+
 def load_status():
     if not os.path.exists(STATUS_FILE): return {"date": datetime.now().strftime("%Y-%m-%d"), "counters": {}}
     try:
@@ -142,7 +211,54 @@ def set_state(entity_id, state, friendly, icon, group, unit=None):
     try: requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json={"state": str(state), "attributes": attrs})
     except: pass
 
-# --- NOWA FUNKCJA RAPORTOWANIA (ANALIZA GRUP I SORTOWANIE) ---
+def delete_ha_state(entity_id):
+    try:
+        requests.delete(f"{API_URL}/states/{entity_id}", headers=HEADERS)
+    except: pass
+
+def get_clean_sensors():
+    sensors = []
+    try:
+        resp = requests.get(f"{API_URL}/states", headers=HEADERS)
+        if resp.status_code == 200:
+            all_states = resp.json()
+            for entity in all_states:
+                eid = entity['entity_id']
+                attrs = entity.get("attributes", {})
+                friendly_name = attrs.get("friendly_name", eid).lower()
+                device_class = attrs.get("device_class")
+                
+                if not (eid.startswith(("sensor.", "binary_sensor.", "switch.", "light."))): continue
+                if attrs.get("managed_by") == "employee_manager": continue
+                if eid.endswith("_status") or eid.endswith("_czas_pracy"): continue
+                if any(bad_word in friendly_name for bad_word in GLOBAL_BLACKLIST): continue
+                if any(eid.startswith(p) for p in BLOCKED_PREFIXES): continue
+                if device_class in BLOCKED_DEVICE_CLASSES: continue
+                if " - " in friendly_name and "status" in friendly_name: continue 
+
+                unit = attrs.get("unit_of_measurement", "")
+                orig_friendly_name = attrs.get("friendly_name", eid)
+                main_label = orig_friendly_name
+                
+                if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
+                elif unit == "W": main_label = "Moc"
+                elif unit == "V": main_label = "Napięcie"
+                elif unit == "kWh": main_label = "Energia"
+                elif unit == "%": main_label = "Wilgotność"
+                
+                sensors.append({
+                    "id": eid, 
+                    "main_label": main_label, 
+                    "sub_label": orig_friendly_name,
+                    "unit": unit, 
+                    "state": entity.get("state", "-"), 
+                    "device_class": device_class
+                })
+            sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
+    except Exception as e:
+        print(f"Błąd API: {e}", flush=True)
+    return sensors
+
 def save_daily_report(work_counters, report_date):
     try:
         log(f">>> Generowanie raportu dobowego za {report_date}...")
@@ -152,8 +268,6 @@ def save_daily_report(work_counters, report_date):
 
         timestamp = f"{report_date} (Raport Dobowy)"
         snapshot = []
-        
-        # Słownik do analizy grup (Pomieszczeń)
         groups_analysis = {}
 
         emps = get_data() 
@@ -161,7 +275,6 @@ def save_daily_report(work_counters, report_date):
             name = emp['name']
             group = emp.get('group', 'Domyślna')
             
-            # Pobieranie czasu pracy
             work_time = 0.0
             if name in work_counters: work_time = round(work_counters[name], 1)
             
@@ -171,17 +284,14 @@ def save_daily_report(work_counters, report_date):
                 "work_time": work_time
             })
 
-            # Analiza Grupowa
             if group not in groups_analysis:
                 groups_analysis[group] = {"total_minutes": 0, "people_count": 0}
             
             groups_analysis[group]["total_minutes"] += work_time
             groups_analysis[group]["people_count"] += 1
 
-        # 1. SORTOWANIE: Najpierw Grupa A-Z, potem Imię A-Z
         snapshot.sort(key=lambda x: (x['group'], x['name']))
 
-        # 2. PRZYGOTOWANIE ANALIZY GRUP DO ZAPISU
         groups_summary = []
         for g_name, stats in groups_analysis.items():
             hours = round(stats["total_minutes"] / 60, 1)
@@ -191,34 +301,34 @@ def save_daily_report(work_counters, report_date):
                 "avg_per_person": round(stats["total_minutes"] / stats["people_count"], 1) if stats["people_count"] > 0 else 0
             })
         
-        # Sortowanie analizy grup
         groups_summary.sort(key=lambda x: x['group'])
 
-        # Zapis do historii
         history.insert(0, {
             "id": int(time.time()), 
             "date": timestamp, 
             "entries": snapshot,
-            "group_summary": groups_summary # Dodajemy sekcję analizy
+            "group_summary": groups_summary
         })
         
-        if len(history) > 365: history = history[:365] # Trzymamy rok
+        if len(history) > 365: history = history[:365]
 
         with open(HISTORY_FILE, 'w') as f: json.dump(history, f, indent=4)
         log(">>> Raport dobowy zapisany.")
     except Exception as e:
         log(f"Błąd zapisu raportu: {e}")
 
-def main():
+# --- GŁÓWNA PĘTLA LOGIKI (W OSOBNYM WĄTKU) ---
+def logic_loop():
     wait_for_api()
-    auto_install_card()
+    # Próba autoinstalacji karty przy starcie
+    install_and_register_card()
+    
     log(f"=== START SYSTEMU LOGIKI ===")
     init_db()
     
     memory = load_status()
     today_str = datetime.now().strftime("%Y-%m-%d")
     
-    # Jeśli system wstał w nowy dzień, resetujemy liczniki (zakładamy że raport zrobił się wczoraj lub przepadł)
     if memory.get("date") != today_str:
         memory = {"date": today_str, "counters": {}}
     
@@ -229,19 +339,14 @@ def main():
         try:
             current_date = datetime.now().strftime("%Y-%m-%d")
             
-            # --- RAPORTOWANIE O PÓŁNOCY ---
-            # Jeśli data w pętli różni się od daty ostatniego obiegu, to znaczy, że minęła północ.
-            # Zapisujemy raport za POPRZEDNI dzień i resetujemy liczniki.
+            # Raport o północy
             if current_date != last_loop_date:
                 save_daily_report(work_counters, last_loop_date)
-                
-                # Reset na nowy dzień
                 work_counters = {}
                 memory["date"] = current_date
                 memory["counters"] = {}
                 save_status(memory)
                 last_loop_date = current_date
-            # ------------------------------
 
             emps = get_data()
             group_stats = {} 
@@ -266,23 +371,29 @@ def main():
                     attrs = data.get('attributes', {})
                     unit = attrs.get('unit_of_measurement')
                     
+                    # Zbieranie statystyk grupowych
                     try:
                         f_val = float(state_val)
                         if unit == '°C': group_stats[group]["temps"].append(f_val)
                         elif unit == '%': group_stats[group]["humidities"].append(f_val)
                         elif unit == 'W' or unit == 'kW':
-                            try:
-                                val = float(state_val)
-                                if unit == 'kW': val *= 1000
-                                
-                                # --- ZMIANA: Pobieramy próg z ustawień pracownika (domyślnie 20W) ---
-                                power_threshold = float(emp.get('threshold', 20.0))
-                                
-                                if val > power_threshold: is_working = True
-                            except: pass
+                             p_val = f_val * 1000 if unit == 'kW' else f_val
+                             group_stats[group]["total_power"] += p_val
+                    except: pass
 
-                    if eid.startswith("binary_sensor.") and state_val == 'on': is_working = True
+                    # Logika "Pracuje" - NAPRAWIONA SKŁADNIA
+                    if unit == 'W' or unit == 'kW':
+                        try:
+                            val = float(state_val)
+                            if unit == 'kW': val *= 1000
+                            power_threshold = float(emp.get('threshold', 20.0))
+                            if val > power_threshold: is_working = True
+                        except: pass
                     
+                    if eid.startswith("binary_sensor.") and state_val == 'on': 
+                        is_working = True
+                    
+                    # Tworzenie sensorów pomocniczych (np. temp, bateria)
                     suffix_info = None
                     if unit in UNIT_MAP: suffix_info = UNIT_MAP[unit]
                     if suffix_info:
@@ -292,7 +403,7 @@ def main():
                 if is_working: 
                     work_counters[name] += (10/60)
                     group_stats[group]["active_count"] += 1
-                    log_minute_to_db(name) # Baza SQL wciąż zbiera co minutę dla bezpieczeństwa
+                    log_minute_to_db(name)
                 
                 set_state(f"sensor.{safe}_status", status, f"{name} - Status", "mdi:laptop" if is_working else "mdi:account-off", group)
                 set_state(f"sensor.{safe}_czas_pracy", round(work_counters[name], 1), f"{name} - Czas", "mdi:clock", group, "min")
@@ -306,6 +417,7 @@ def main():
                 
                 if stats["total_power"] > 0:
                     set_state(f"sensor.grupa_{safe_grp}_moc", round(stats["total_power"], 1), f"{grp_name} - Moc", "mdi:lightning-bolt", grp_name, "W")
+                
                 if len(stats["temps"]) > 0:
                     avg_temp = sum(stats["temps"]) / len(stats["temps"])
                     set_state(f"sensor.grupa_{safe_grp}_temperatura", round(avg_temp, 1), f"{grp_name} - Temp", "mdi:thermometer", grp_name, "°C")
@@ -318,5 +430,132 @@ def main():
 
         time.sleep(10)
 
-if __name__ == "__main__":
-    main()
+# --- STARTUJEMY WĄTEK LOGIKI W TLE ---
+threading.Thread(target=logic_loop, daemon=True).start()
+
+
+# --- CZĘŚĆ WEBOWA (FLASK) ---
+
+@app.route('/')
+def index():
+    # Ponieważ HTML jest w osobnym pliku index.html, używamy render_template
+    # Jeśli nie masz index.html w folderze templates, a chcesz użyć inline HTML,
+    # musisz przywrócić zmienną HTML_PAGE i użyć render_template_string
+    return render_template('index.html', all_sensors=get_clean_sensors())
+
+@app.route('/api/groups', methods=['GET', 'POST'])
+def handle_groups():
+    grps = load_json(GROUPS_FILE)
+    if not grps: grps = ["Domyślna"]
+    if request.method == 'POST':
+        name = request.json.get('name')
+        if name and name not in grps: grps.append(name)
+        save_json(GROUPS_FILE, grps)
+    return jsonify(grps)
+
+@app.route('/api/groups/<name>', methods=['DELETE'])
+def del_group(name):
+    if name == "Domyślna": return jsonify({"error": "Nie można usunąć"}), 400
+    grps = load_json(GROUPS_FILE)
+    if name in grps: grps.remove(name)
+    save_json(GROUPS_FILE, grps)
+    emps = load_json(DATA_FILE)
+    for e in emps:
+        if e.get('group') == name: e['group'] = "Domyślna"
+    save_json(DATA_FILE, emps)
+    return jsonify({"status":"ok"})
+
+@app.route('/api/employees', methods=['GET'])
+def api_get(): return jsonify(load_json(DATA_FILE))
+
+@app.route('/api/employees', methods=['POST'])
+def api_post():
+    data = request.json
+    emps = load_json(DATA_FILE)
+    emps = [e for e in emps if e['name'] != data['name']]
+    emps.append(data)
+    save_json(DATA_FILE, emps)
+    return jsonify({"status":"ok"})
+
+@app.route('/api/employees/<int:i>', methods=['DELETE'])
+def api_del(i):
+    emps = load_json(DATA_FILE)
+    if 0 <= i < len(emps):
+        to_delete = emps[i]
+        safe_name = to_delete['name'].lower().replace(" ", "_")
+        delete_ha_state(f"sensor.{safe_name}_status")
+        delete_ha_state(f"sensor.{safe_name}_czas_pracy")
+        for suffix in MANAGED_SUFFIXES:
+            delete_ha_state(f"sensor.{safe_name}{suffix}")
+        del emps[i]
+        save_json(DATA_FILE, emps)
+    return jsonify({"status":"ok"})
+
+@app.route('/api/monitor', methods=['GET'])
+def api_monitor():
+    emps = load_json(DATA_FILE)
+    res = []
+    for emp in emps:
+        safe = emp['name'].lower().replace(" ","_")
+        status = get_ha_state(f"sensor.{safe}_status") or "N/A"
+        time = get_ha_state(f"sensor.{safe}_czas_pracy") or "0"
+        
+        # Pobieranie pomiarów
+        meas = []
+        for eid in emp.get('sensors', []):
+            st = get_state_full(eid)
+            if st:
+                u = st['attributes'].get('unit_of_measurement','')
+                meas.append({"label": st['attributes'].get('friendly_name', eid), "value": st['state'], "unit": u})
+        
+        res.append({
+            "name": emp['name'],
+            "group": emp.get('group', 'Domyślna'),
+            "status": status,
+            "work_time": time,
+            "measurements": meas
+        })
+    return jsonify(res)
+
+@app.route('/download_report')
+def download_report():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT work_date, employee_name, minutes_worked FROM work_history ORDER BY work_date DESC")
+        rows = c.fetchall()
+        conn.close()
+        
+        si = io.StringIO()
+        cw = csv.writer(si, delimiter=';')
+        cw.writerow(["Data", "Pracownik", "Minuty", "Godziny"])
+        for r in rows:
+            cw.writerow([r[0], r[1], r[2], round(r[2]/60, 2)])
+            
+        return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": "attachment; filename=Raport.csv"})
+    except: return "Błąd", 500
+
+@app.route('/api/install_card', methods=['POST'])
+def api_install_card():
+    # Wywołujemy naszą funkcję instalującą
+    success, msg = install_and_register_card()
+    
+    if success:
+        return jsonify({"success": True, "message": msg})
+    else:
+        return jsonify({"success": False, "message": msg}), 500
+
+# Endpoint do pobierania historii JSON
+@app.route('/api/history', methods=['GET'])
+def api_history():
+    return jsonify(load_json(HISTORY_FILE))
+
+# Serwowanie pliku karty z dysku (dla HA)
+@app.route('/local/employee-card.js')
+def serve_card_file():
+    if os.path.exists(SOURCE_CARD_FILE):
+        return send_file(SOURCE_CARD_FILE, mimetype='application/javascript')
+    return "Not found", 404
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
