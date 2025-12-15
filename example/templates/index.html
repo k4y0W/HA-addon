@@ -180,7 +180,11 @@
                     </div>
                 </div>
             </div>
-
+            <div class="mb-3">
+                <label class="form-label fw-bold">Próg mocy (W)</label>
+                <input type="number" class="form-control" id="empThreshold" value="20" placeholder="Domyślnie 20">
+                <div class="form-text text-muted">Powyżej tej wartości status zmieni się na "Pracuje".</div>
+            </div>
             <div class="tab-pane fade" id="pills-history">
                 <div class="card shadow-sm">
                     <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
@@ -436,7 +440,7 @@
                     return;
                 }
 
-                await fetch('api/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name, group: group, sensors: selected }) });
+                await fetch('api/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name, group: group, sensors: selected,threshold: threshold }) });
                 document.getElementById('empName').value = '';
                 renderSensorList(); loadConfig(); refreshMonitorData(); alert('Zapisano!');
             };

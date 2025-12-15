@@ -270,12 +270,15 @@ def main():
                         f_val = float(state_val)
                         if unit == '°C': group_stats[group]["temps"].append(f_val)
                         elif unit == '%': group_stats[group]["humidities"].append(f_val)
-                        elif unit == 'W':
-                            group_stats[group]["total_power"] += f_val
-                            if f_val > 20.0: is_working = True
-                        elif unit == 'kW':
-                            group_stats[group]["total_power"] += (f_val * 1000)
-                            if (f_val * 1000) > 20.0: is_working = True
+                        elif unit == 'W' or unit == 'kW':
+                    try:
+                        val = float(state_val)
+                        if unit == 'kW': val *= 1000
+                        
+                        # --- ZMIANA: Pobieramy próg z ustawień pracownika (domyślnie 20W) ---
+                        power_threshold = float(emp.get('threshold', 20.0))
+                        
+                        if val > power_threshold: is_working = True
                     except: pass
 
                     if eid.startswith("binary_sensor.") and state_val == 'on': is_working = True
