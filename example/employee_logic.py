@@ -8,21 +8,38 @@ import threading
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, Response, send_file
 
-# --- KONFIGURACJA PLIKÓW ---
+# --- CONFIGURATION ---
 DATA_FILE = "/data/employees.json"
 STATUS_FILE = "/data/status.json"
 OPTIONS_FILE = "/data/options.json"
 DB_FILE = "/data/employee_history.db"
 HISTORY_FILE = "/data/history.json"
-SOURCE_CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'employee-card.js')
 HA_WWW_DIR = "/config/www"
 CARD_URL_RESOURCE = "/local/employee-card.js"
 
-# --- KONFIGURACJA API I TOKENA ---
+# --- SMART PATH DETECTION FOR CARD FILE ---
+# We check current directory, /app, and root to find the JS file
+POSSIBLE_PATHS = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'employee-card.js'),
+    '/app/employee-card.js',
+    '/employee-card.js',
+    'employee-card.js'
+]
+
+SOURCE_CARD_FILE = None
+for path in POSSIBLE_PATHS:
+    if os.path.exists(path):
+        SOURCE_CARD_FILE = path
+        break
+
+# Default fallback if not found (will cause error later but better than crash)
+if not SOURCE_CARD_FILE:
+    SOURCE_CARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'employee-card.js')
+
+# --- API & TOKEN SETUP ---
 TOKEN = ""
 API_URL = ""
 
-# Próba odczytu tokena z opcji
 try:
     if os.path.exists(OPTIONS_FILE):
         with open(OPTIONS_FILE, 'r') as f:
@@ -31,14 +48,13 @@ try:
 except:
     pass
 
-# Decyzja o trybie (Supervisor vs Token Użytkownika)
 if len(TOKEN) > 50:
     API_URL = "http://172.30.32.1:8123/api"
-    print(f">>> [INIT] TRYB RĘCZNY: Używam tokena użytkownika. Adres: {API_URL}", flush=True)
+    print(f">>> [INIT] MANUAL MODE: User Token. URL: {API_URL}", flush=True)
 else:
     TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
     API_URL = "http://supervisor/core/api"
-    print(">>> [INIT] TRYB SUPERVISOR: Używam tokena systemowego.", flush=True)
+    print(">>> [INIT] SUPERVISOR MODE: System Token.", flush=True)
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
@@ -47,7 +63,7 @@ HEADERS = {
 
 app = Flask(__name__)
 
-# --- KONFIGURACJA MAPOWANIA JEDNOSTEK ---
+# --- UNIT MAPPING ---
 UNIT_MAP = {
     "W": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
     "kW": {"suffix": "moc", "icon": "mdi:lightning-bolt"},
@@ -75,72 +91,56 @@ PRETTY_NAMES = {
     "connectivity": "Połączenie"
 }
 
-# --- FUNKCJE POMOCNICZE (LOGIKA) ---
+# --- HELPER FUNCTIONS ---
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 def wait_for_api():
-    log(f"Sprawdzanie połączenia z API: {API_URL} ...")
+    log(f"Checking API connection: {API_URL} ...")
     while True:
         try:
             r = requests.get(f"{API_URL}/", headers=HEADERS, timeout=5)
             if r.status_code in [200, 201, 401, 404, 405]:
-                log(">>> POŁĄCZENIE Z API NAWIĄZANE! <<<")
+                log(">>> API CONNECTION ESTABLISHED! <<<")
                 return
         except Exception:
             pass
         time.sleep(5)
 
 def install_and_register_card():
-    """Kopiuje plik i rejestruje go w Lovelace Resources"""
-    
-    # 1. Ścieżki
-    SOURCE = SOURCE_CARD_FILE
-    DEST_DIR = HA_WWW_DIR
-    DEST_FILE = os.path.join(DEST_DIR, "employee-card.js")
-    RESOURCE_URL = CARD_URL_RESOURCE
+    """Copies card file and registers it in Lovelace"""
+    if not SOURCE_CARD_FILE or not os.path.exists(SOURCE_CARD_FILE):
+        return False, f"Source file not found. Checked: {POSSIBLE_PATHS}"
 
-    # 2. Fizyczne Kopiowanie Pliku
+    # 1. Copy File
+    DEST_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
     try:
-        if not os.path.exists(DEST_DIR):
-            os.makedirs(DEST_DIR) # Tworzy folder www jeśli go nie ma
+        if not os.path.exists(HA_WWW_DIR):
+            os.makedirs(HA_WWW_DIR)
         
-        if os.path.exists(SOURCE):
-            shutil.copy2(SOURCE, DEST_FILE) # Kopiuje i nadpisuje jeśli istnieje
-            print(f">>> SKOPIOWANO: {SOURCE} -> {DEST_FILE}", flush=True)
-        else:
-            return False, f"Brak pliku źródłowego: {SOURCE}"
+        shutil.copy2(SOURCE_CARD_FILE, DEST_FILE)
+        log(f">>> Card copied to {DEST_FILE}")
     except Exception as e:
-        return False, f"Błąd kopiowania pliku: {str(e)}"
+        return False, f"File copy error: {str(e)}"
 
-    # 3. Rejestracja w API Home Assistant (Lovelace Resources)
+    # 2. Register in Lovelace
     api_url = f"{API_URL}/lovelace/resources"
-    
     try:
-        # A. Pobierz listę istniejących zasobów, żeby nie dublować
         get_res = requests.get(api_url, headers=HEADERS)
-        
         if get_res.status_code == 200:
-            resources = get_res.json()
-            for res in resources:
-                if res['url'] == RESOURCE_URL:
-                    return True, "Karta zaktualizowana (plik nadpisany)!"
+            for res in get_res.json():
+                if res['url'] == CARD_URL_RESOURCE:
+                    return True, "Card updated (file overwritten)!"
         
-        # B. Jeśli nie ma - rejestrujemy nowy zasób
-        payload = {
-            "type": "module",
-            "url": RESOURCE_URL
-        }
-        post_res = requests.post(api_url, headers=HEADERS, json=payload)
-        
+        # Register new
+        post_res = requests.post(api_url, headers=HEADERS, json={"type": "module", "url": CARD_URL_RESOURCE})
         if post_res.status_code in [200, 201]:
-            return True, "Karta zarejestrowana pomyślnie!"
+            return True, "Card registered successfully!"
         else:
-            return False, f"Błąd API HA ({post_res.status_code}): {post_res.text}"
-            
+            return False, f"API Error ({post_res.status_code}): {post_res.text}"
     except Exception as e:
-        return False, f"Błąd połączenia z API: {str(e)}"
+        return False, f"API Connection Error: {str(e)}"
 
 def init_db():
     try:
@@ -317,10 +317,10 @@ def save_daily_report(work_counters, report_date):
     except Exception as e:
         log(f"Błąd zapisu raportu: {e}")
 
-# --- GŁÓWNA PĘTLA LOGIKI (W OSOBNYM WĄTKU) ---
+# --- MAIN LOGIC LOOP (BACKGROUND THREAD) ---
 def logic_loop():
     wait_for_api()
-    # Próba autoinstalacji karty przy starcie
+    # Try auto-install card on startup
     install_and_register_card()
     
     log(f"=== START SYSTEMU LOGIKI ===")
@@ -381,7 +381,7 @@ def logic_loop():
                              group_stats[group]["total_power"] += p_val
                     except: pass
 
-                    # Logika "Pracuje" - NAPRAWIONA SKŁADNIA
+                    # Logika "Pracuje" - FIXED INDENTATION
                     if unit == 'W' or unit == 'kW':
                         try:
                             val = float(state_val)
@@ -430,17 +430,14 @@ def logic_loop():
 
         time.sleep(10)
 
-# --- STARTUJEMY WĄTEK LOGIKI W TLE ---
+# --- START BACKGROUND LOGIC ---
 threading.Thread(target=logic_loop, daemon=True).start()
 
 
-# --- CZĘŚĆ WEBOWA (FLASK) ---
+# --- WEB SERVER ROUTES (FLASK) ---
 
 @app.route('/')
 def index():
-    # Ponieważ HTML jest w osobnym pliku index.html, używamy render_template
-    # Jeśli nie masz index.html w folderze templates, a chcesz użyć inline HTML,
-    # musisz przywrócić zmienną HTML_PAGE i użyć render_template_string
     return render_template('index.html', all_sensors=get_clean_sensors())
 
 @app.route('/api/groups', methods=['GET', 'POST'])
@@ -459,10 +456,6 @@ def del_group(name):
     grps = load_json(GROUPS_FILE)
     if name in grps: grps.remove(name)
     save_json(GROUPS_FILE, grps)
-    emps = load_json(DATA_FILE)
-    for e in emps:
-        if e.get('group') == name: e['group'] = "Domyślna"
-    save_json(DATA_FILE, emps)
     return jsonify({"status":"ok"})
 
 @app.route('/api/employees', methods=['GET'])
@@ -500,21 +493,11 @@ def api_monitor():
         status = get_ha_state(f"sensor.{safe}_status") or "N/A"
         time = get_ha_state(f"sensor.{safe}_czas_pracy") or "0"
         
-        # Pobieranie pomiarów
         meas = []
-        for eid in emp.get('sensors', []):
-            st = get_state_full(eid)
-            if st:
-                u = st['attributes'].get('unit_of_measurement','')
-                meas.append({"label": st['attributes'].get('friendly_name', eid), "value": st['state'], "unit": u})
-        
-        res.append({
-            "name": emp['name'],
-            "group": emp.get('group', 'Domyślna'),
-            "status": status,
-            "work_time": time,
-            "measurements": meas
-        })
+        for entity_id in emp.get('sensors', []):
+            val = get_ha_state(entity_id)
+            meas.append({"label": entity_id, "value": val, "unit": ""}) 
+        res.append({"name": emp['name'], "group": emp.get('group', 'Domyślna'), "status": status, "work_time": time, "measurements": meas})
     return jsonify(res)
 
 @app.route('/download_report')
@@ -537,23 +520,19 @@ def download_report():
 
 @app.route('/api/install_card', methods=['POST'])
 def api_install_card():
-    # Wywołujemy naszą funkcję instalującą
     success, msg = install_and_register_card()
-    
     if success:
         return jsonify({"success": True, "message": msg})
     else:
         return jsonify({"success": False, "message": msg}), 500
 
-# Endpoint do pobierania historii JSON
 @app.route('/api/history', methods=['GET'])
 def api_history():
     return jsonify(load_json(HISTORY_FILE))
 
-# Serwowanie pliku karty z dysku (dla HA)
 @app.route('/local/employee-card.js')
 def serve_card_file():
-    if os.path.exists(SOURCE_CARD_FILE):
+    if SOURCE_CARD_FILE and os.path.exists(SOURCE_CARD_FILE):
         return send_file(SOURCE_CARD_FILE, mimetype='application/javascript')
     return "Not found", 404
 
