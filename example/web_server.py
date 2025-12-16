@@ -20,26 +20,31 @@ HA_WWW_DIR = "/config/www"
 DEST_JS_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
 CARD_URL_RESOURCE = "/local/employee-card.js"
 
-# --- KONFIGURACJA API I TOKENA ---
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 TOKEN = ""
 API_URL = ""
 
-try:
-    if os.path.exists(OPTIONS_FILE):
-        with open(OPTIONS_FILE, 'r') as f:
-            opts = json.load(f)
-            TOKEN = opts.get("ha_token", "").strip()
-except Exception as e:
-    print(f"Błąd odczytu opcji: {e}")
-
-if len(TOKEN) > 50:
-    API_URL = "http://172.30.32.1:8123/api"
-    print(f">>> [WEB] TRYB RĘCZNY: Używam tokena użytkownika. Adres: {API_URL}", flush=True)
-else:
-    TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
+if SUPERVISOR_TOKEN:
+    TOKEN = SUPERVISOR_TOKEN
     API_URL = "http://supervisor/core/api"
-    print(">>> [WEB] TRYB SUPERVISOR: Używam tokena systemowego.", flush=True)
-
+    # Zmieniona informacja w logu, żeby widzieć skąd startujemy
+    print(">>> [API] Używam Supervizora (Adres: supervisor/core/api)", flush=True)
+else:
+    # Ten blok jest tylko awaryjny (jeśli w ogóle nie ma Supervisora)
+    print(">>> [API] OSTRZEŻENIE: Brak Supervizora - Fallback na plik opcji.", flush=True)
+    try:
+        if os.path.exists(OPTIONS_FILE):
+            with open(OPTIONS_FILE, 'r') as f:
+                opts = json.load(f)
+                TOKEN = opts.get("ha_token", "").strip()
+    except: pass
+    
+    # Używamy adresu wewnętrznego HA, ale on jest zawodny bez Supervizora
+    API_URL = "http://homeassistant:8123/api"
+    
+if not TOKEN:
+    print("!!! [API] Błąd: Brak tokena do komunikacji z HA.", flush=True)
+    
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json",

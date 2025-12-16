@@ -18,8 +18,6 @@ HA_WWW_DIR = "/config/www"
 CARD_URL_RESOURCE = "/local/employee-card.js"
 SOURCE_CARD_FILE = "/app/employee-card.js"
 
-# --- KONFIGURACJA API (NAPRAWIONA KOLEJNOŚĆ) ---
-# Najpierw Supervisor - to najpewniejsze połączenie wewnątrz Add-onu
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 TOKEN = ""
 API_URL = ""
@@ -27,9 +25,11 @@ API_URL = ""
 if SUPERVISOR_TOKEN:
     TOKEN = SUPERVISOR_TOKEN
     API_URL = "http://supervisor/core/api"
-    print(">>> [INIT] TRYB SUPERVISOR: Używam tokena systemowego.", flush=True)
+    # Zmieniona informacja w logu, żeby widzieć skąd startujemy
+    print(">>> [API] Używam Supervizora (Adres: supervisor/core/api)", flush=True)
 else:
-    # Fallback do pliku (tylko jeśli nie ma Supervisora, np. testy lokalne)
+    # Ten blok jest tylko awaryjny (jeśli w ogóle nie ma Supervisora)
+    print(">>> [API] OSTRZEŻENIE: Brak Supervizora - Fallback na plik opcji.", flush=True)
     try:
         if os.path.exists(OPTIONS_FILE):
             with open(OPTIONS_FILE, 'r') as f:
@@ -37,14 +37,12 @@ else:
                 TOKEN = opts.get("ha_token", "").strip()
     except: pass
     
-    if len(TOKEN) > 50:
-        # UWAGA: Adres localhost/172... działa rzadko wewnątrz kontenerów. 
-        # Lepiej używać adresu IP hosta jeśli supervisor nie działa.
-        API_URL = "http://homeassistant:8123/api" 
-        print(f">>> [INIT] TRYB RĘCZNY: Używam tokena z pliku.", flush=True)
-    else:
-        print("!!! OSTRZEŻENIE: Brak tokena Supervisora i brak tokena w pliku!", flush=True)
-
+    # Używamy adresu wewnętrznego HA, ale on jest zawodny bez Supervizora
+    API_URL = "http://homeassistant:8123/api"
+    
+if not TOKEN:
+    print("!!! [API] Błąd: Brak tokena do komunikacji z HA.", flush=True)
+    
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json",
