@@ -5,6 +5,8 @@ import sqlite3
 import shutil
 import time
 import threading
+import io
+import csv
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, Response, send_file
 
@@ -16,7 +18,27 @@ DB_FILE = "/data/employee_history.db"
 HISTORY_FILE = "/data/history.json"
 HA_WWW_DIR = "/config/www"
 CARD_URL_RESOURCE = "/local/employee-card.js"
-SOURCE_CARD_FILE = "/app/employee-card.js"
+
+# --- INTELIGENTNE SZUKANIE PLIKU KARTY ---
+# Rozwiązuje problem "No such file or directory"
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+POSSIBLE_PATHS = [
+    os.path.join(CURRENT_DIR, 'employee-card.js'),
+    os.path.join(CURRENT_DIR, 'example', 'employee-card.js'),
+    '/app/employee-card.js',
+    '/app/example/employee-card.js',
+    '/employee-card.js'
+]
+
+SOURCE_CARD_FILE = None
+for path in POSSIBLE_PATHS:
+    if os.path.exists(path):
+        SOURCE_CARD_FILE = path
+        print(f">>> [INIT] Znaleziono plik karty w: {path}", flush=True)
+        break
+
+if not SOURCE_CARD_FILE:
+    print(f">>> [WARN] Nie znaleziono pliku employee-card.js w standardowych lokalizacjach.", flush=True)
 
 # --- KONFIGURACJA API I TOKENA ---
 TOKEN = ""
@@ -58,6 +80,14 @@ UNIT_MAP = {
 }
 
 MANAGED_SUFFIXES = ["_status", "_czas_pracy"]
+GLOBAL_BLACKLIST = [
+    "indicator", "light", "led", "display", "lock", "child", "physical control",     
+    "filter", "life", "used time", "alarm", "error", "fault", "problem",     
+    "update", "install", "version", "identify", "zidentyfikuj", "info",
+    "iphone", "ipad", "phone", "mobile", "router", "gateway", "brama"      
+]
+BLOCKED_PREFIXES = ["sensor.backup_", "sensor.sun_", "sensor.date", "sensor.time", "sensor.zone", "sensor.automation", "sensor.script", "update.", "person.", "zone.", "sun.", "todo.", "button.", "input_"]
+BLOCKED_DEVICE_CLASSES = ["timestamp", "enum", "update", "date", "identify"]
 PRETTY_NAMES = {
     "temperature": "Temperatura", "humidity": "Wilgotność", "pressure": "Ciśnienie",
     "power": "Moc", "energy": "Energia", "voltage": "Napięcie", "current": "Natężenie",
@@ -65,7 +95,7 @@ PRETTY_NAMES = {
     "connectivity": "Połączenie"
 }
 
-# --- FUNKCJE POMOCNICZE (LOGIKA) ---
+# --- FUNKCJE POMOCNICZE ---
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -84,25 +114,32 @@ def wait_for_api():
 
 def install_and_register_card():
     """Kopiuje plik i rejestruje go w Lovelace Resources"""
-    if not os.path.exists(SOURCE_CARD_FILE):
-        return
-        
+    
     DEST_FILE = os.path.join(HA_WWW_DIR, "employee-card.js")
-    try:
-        if not os.path.exists(HA_WWW_DIR):
-            os.makedirs(HA_WWW_DIR)
-        shutil.copy2(SOURCE_CARD_FILE, DEST_FILE)
-    except: pass
-
+    
+    # 1. Kopiowanie
+    if SOURCE_CARD_FILE and os.path.exists(SOURCE_CARD_FILE):
+        try:
+            if not os.path.exists(HA_WWW_DIR):
+                os.makedirs(HA_WWW_DIR)
+            shutil.copy2(SOURCE_CARD_FILE, DEST_FILE)
+            log(f">>> SKOPIOWANO: {SOURCE_CARD_FILE} -> {DEST_FILE}")
+        except Exception as e:
+            print(f"Błąd kopiowania: {e}")
+    
+    # 2. Rejestracja w API
     api_url = f"{API_URL}/lovelace/resources"
     try:
         get_res = requests.get(api_url, headers=HEADERS)
         if get_res.status_code == 200:
             for res in get_res.json():
-                if res['url'] == CARD_URL_RESOURCE: return
+                if res['url'] == CARD_URL_RESOURCE:
+                    return True, "Karta zaktualizowana!"
         
         requests.post(api_url, headers=HEADERS, json={"type": "module", "url": CARD_URL_RESOURCE})
-    except: pass
+        return True, "Zarejestrowano!"
+    except Exception as e:
+        return False, f"Błąd API: {e}"
 
 def init_db():
     try:
@@ -163,7 +200,6 @@ def get_state_full(entity_id):
     return None
 
 def set_state(entity_id, state, friendly, icon, unit=None):
-    # Usunięto 'group' z atrybutów
     attrs = {"friendly_name": friendly, "icon": icon, "managed_by": "employee_manager"}
     if unit: attrs["unit_of_measurement"] = unit
     try: requests.post(f"{API_URL}/states/{entity_id}", headers=HEADERS, json={"state": str(state), "attributes": attrs})
@@ -175,6 +211,7 @@ def delete_ha_state(entity_id):
     except: pass
 
 def get_clean_sensors():
+    """Pobiera listę sensorów do wyświetlenia w panelu konfiguracyjnym"""
     sensors = []
     try:
         resp = requests.get(f"{API_URL}/states", headers=HEADERS)
@@ -182,10 +219,40 @@ def get_clean_sensors():
             all_states = resp.json()
             for entity in all_states:
                 eid = entity['entity_id']
+                attrs = entity.get("attributes", {})
+                friendly_name = attrs.get("friendly_name", eid)
+                friendly_search = friendly_name.lower() if friendly_name else ""
+                device_class = attrs.get("device_class")
+                
+                # Filtrowanie śmieci
                 if not (eid.startswith(("sensor.", "binary_sensor.", "switch.", "light."))): continue
-                # Reszta logiki filtrowania...
-                sensors.append({"id": eid, "state": entity.get("state", "-")})
-    except: pass
+                if attrs.get("managed_by") == "employee_manager": continue
+                if eid.endswith("_status") or eid.endswith("_czas_pracy"): continue
+                if any(bad in friendly_search for bad in GLOBAL_BLACKLIST): continue
+                if any(eid.startswith(p) for p in BLOCKED_PREFIXES): continue
+                if device_class in BLOCKED_DEVICE_CLASSES: continue
+
+                unit = attrs.get("unit_of_measurement", "")
+                main_label = friendly_name
+                
+                # Ładne nazwy dla typów
+                if device_class in PRETTY_NAMES: main_label = PRETTY_NAMES[device_class]
+                elif unit == "W": main_label = "Moc"
+                elif unit == "V": main_label = "Napięcie"
+                elif unit == "kWh": main_label = "Energia"
+                elif unit == "%": main_label = "Wilgotność"
+                
+                sensors.append({
+                    "id": eid, 
+                    "main_label": main_label, 
+                    "sub_label": friendly_name,
+                    "unit": unit, 
+                    "state": entity.get("state", "-"), 
+                    "device_class": device_class
+                })
+            sensors.sort(key=lambda x: (x['main_label'], x['sub_label']))
+    except Exception as e:
+        print(f"Błąd API: {e}", flush=True)
     return sensors
 
 def save_daily_report(work_counters, report_date):
@@ -201,16 +268,9 @@ def save_daily_report(work_counters, report_date):
         emps = get_data() 
         for emp in emps:
             name = emp['name']
-            
-            work_time = 0.0
-            if name in work_counters: work_time = round(work_counters[name], 1)
-            
-            snapshot.append({
-                "name": name, 
-                "work_time": work_time
-            })
+            work_time = round(work_counters.get(name, 0.0), 1)
+            snapshot.append({"name": name, "work_time": work_time})
 
-        # Sortowanie alfabetyczne po nazwie
         snapshot.sort(key=lambda x: x['name'])
 
         history.insert(0, {
@@ -247,11 +307,11 @@ def logic_loop():
         try:
             current_date = datetime.now().strftime("%Y-%m-%d")
             
+            # Raport o północy
             if current_date != last_loop_date:
                 save_daily_report(work_counters, last_loop_date)
                 work_counters = {}
-                memory["date"] = current_date
-                memory["counters"] = {}
+                memory = {"date": current_date, "counters": {}}
                 save_status(memory)
                 last_loop_date = current_date
 
@@ -273,7 +333,7 @@ def logic_loop():
                     attrs = data.get('attributes', {})
                     unit = attrs.get('unit_of_measurement')
                     
-                    # Logika "Pracuje"
+                    # Logika "Pracuje" (Moc > Próg)
                     if unit == 'W' or unit == 'kW':
                         try:
                             val = float(state_val)
@@ -282,9 +342,11 @@ def logic_loop():
                             if val > power_threshold: is_working = True
                         except: pass
                     
+                    # Logika "Pracuje" (Binary Sensor)
                     if eid.startswith("binary_sensor.") and state_val == 'on': 
                         is_working = True
                     
+                    # Tworzenie wirtualnych sensorów pomocniczych
                     suffix_info = None
                     if unit in UNIT_MAP: suffix_info = UNIT_MAP[unit]
                     if suffix_info:
@@ -306,23 +368,27 @@ def logic_loop():
 
         time.sleep(10)
 
+# Uruchomienie wątku logiki w tle
 threading.Thread(target=logic_loop, daemon=True).start()
 
-# --- WEB ROUTES ---
+# --- WEB ROUTES (FLASK) ---
 @app.route('/')
 def index():
     return render_template('index.html', all_sensors=get_clean_sensors())
 
-@app.route('/api/employees', methods=['GET', 'POST'])
-def api_employees():
-    if request.method == 'POST':
-        data = request.json
-        emps = load_json(DATA_FILE)
-        emps = [e for e in emps if e['name'] != data['name']]
-        emps.append(data)
-        save_json(DATA_FILE, emps)
-        return jsonify({"status":"ok"})
-    return jsonify(load_json(DATA_FILE))
+@app.route('/api/employees', methods=['GET'])
+def api_get(): return jsonify(load_json(DATA_FILE))
+
+@app.route('/api/employees', methods=['POST'])
+def api_post():
+    data = request.json
+    emps = load_json(DATA_FILE)
+    # Nadpisz jeśli istnieje, dodaj jeśli nowy
+    emps = [e for e in emps if e['name'] != data['name']]
+    if 'group' in data: del data['group'] # Czyszczenie pola group jeśli zostało
+    emps.append(data)
+    save_json(DATA_FILE, emps)
+    return jsonify({"status":"ok"})
 
 @app.route('/api/employees/<int:i>', methods=['DELETE'])
 def api_del(i):
@@ -346,6 +412,7 @@ def api_monitor():
         safe = emp['name'].lower().replace(" ","_")
         status = get_ha_state(f"sensor.{safe}_status") or "N/A"
         time = get_ha_state(f"sensor.{safe}_czas_pracy") or "0"
+        
         meas = []
         for entity_id in emp.get('sensors', []):
             val = get_ha_state(entity_id)
@@ -361,11 +428,13 @@ def download_report():
         c.execute("SELECT work_date, employee_name, minutes_worked FROM work_history ORDER BY work_date DESC")
         rows = c.fetchall()
         conn.close()
+        
         si = io.StringIO()
         cw = csv.writer(si, delimiter=';')
         cw.writerow(["Data", "Pracownik", "Minuty", "Godziny"])
         for r in rows:
             cw.writerow([r[0], r[1], r[2], round(r[2]/60, 2)])
+            
         return Response(si.getvalue(), mimetype="text/csv", headers={"Content-disposition": "attachment; filename=Raport.csv"})
     except: return "Błąd", 500
 
